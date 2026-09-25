@@ -1,0 +1,15 @@
+/target
+
+# Audio: el mp3 del concierto no va al repo (pesa y es material con derechos)
+*.mp3
+
+# Capturas y volcados que genera el programa, no son fuente
+foto_t*.png
+foto_*s.png
+400x300_t*.png
+n?_*.png
+taa_*.png
+
+# Basura del sistema y respaldos
+.DS_Store
+*.bak

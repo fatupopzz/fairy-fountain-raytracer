@@ -1,0 +1,29 @@
+[package]
+name = "raytracer"
+version = "0.1.0"
+edition = "2021"
+
+# Hay dos binarios: el raytracer y el analizador de la cancion
+# (`src/bin/analizar.rs`, que se corre a mano y genera `src/mapa.rs`). Sin
+# esto, `cargo run` no sabe cual de los dos queres y no arranca ninguno.
+default-run = "raytracer"
+
+[dependencies]
+raylib = "5.5"
+nalgebra-glm = "0.21"
+rayon = "1.10"
+image = "0.25"
+
+# Sin esto, `cargo run` en debug es tan lento que no vas a poder iterar.
+# Compila TU codigo con optimizacion basica y las dependencias al maximo.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+# NO agregar LTO aca. Suena a que tendria que ayudar (el trazador son
+# funciones chiquitas llamadas millones de veces, repartidas en varios
+# archivos) pero se midio y no cambia nada: 50.8 ms con `lto = "fat"` y
+# `codegen-units = 1` contra 50.7 ms sin nada, o sea ruido. Lo unico que
+# cambia es que el build de release pasa de 6 a 11 segundos.
