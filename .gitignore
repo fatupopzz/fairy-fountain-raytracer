@@ -13,3 +13,4 @@ taa_*.png
 # Basura del sistema y respaldos
 .DS_Store
 *.bak
+loser_sync.json
