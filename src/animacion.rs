@@ -22,7 +22,7 @@ use crate::ray_intersect::RayIntersect;
 use crate::sphere::Sphere;
 use crate::sync::SceneParams;
 use crate::triangle::Triangle;
-use nalgebra_glm::Vec3;
+use crate::vec3::Vec3;
 use raylib::prelude::Color;
 use std::any::Any;
 

@@ -23,7 +23,7 @@
 //! Afuera de este archivo nadie sabe que existe un JSON. El loop llama a
 //! `get_scene_params(t)` y usa lo que salga.
 
-use nalgebra_glm::Vec3;
+use crate::vec3::Vec3;
 use std::fs;
 
 /// Cuantos haces de laser tiene la escena.

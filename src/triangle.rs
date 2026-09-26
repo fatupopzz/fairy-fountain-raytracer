@@ -1,6 +1,6 @@
 use crate::material::Material;
 use crate::ray_intersect::{Intersect, RayIntersect};
-use nalgebra_glm::{cross, dot, normalize, Vec3};
+use crate::vec3::{cross, dot, normalize, Vec3};
 
 /// Triangulo definido por sus tres vertices.
 /// Con esto ya se puede armar cualquier figura plana pegando triangulos.

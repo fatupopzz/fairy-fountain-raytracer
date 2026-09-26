@@ -34,7 +34,7 @@
 //! sola vez al arrancar. Con miles de objetos habria que repartirlos en
 //! cajones, que es lo que hace la version rapida del mismo metodo.
 
-use nalgebra_glm::Vec3;
+use crate::vec3::Vec3;
 
 /// Cuantos objetos, como maximo, entran en una hoja. Con menos que esto no
 /// vale la pena partir: el test del nodo costaria mas que probar los dos.

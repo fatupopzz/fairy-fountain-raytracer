@@ -6,6 +6,10 @@ Fountain Theme**. No hay motor 3D: la geometría, la iluminación, las sombras,
 los reflejos y el cielo son código propio. Lo único que aporta raylib es la
 ventana, el audio y la capacidad de correr shaders de fragmentos.
 
+Las únicas dependencias son `raylib` (ventana, entrada, audio, shaders),
+`rayon` (repartir las filas entre hilos) e `image` (leer y escribir PNG).
+Ni matemática de vectores, ni intersecciones, ni BVH, ni sombreado.
+
 ![La fuente de noche](docs/portada.jpg)
 
 ---
@@ -96,6 +100,10 @@ detectar) y el golpe del bajo.
 
 ### El trazado
 
+- La aritmética de vectores es propia (`src/vec3.rs`): `Vec3`, producto
+  punto, producto cruz, normalización y los operadores. Sin librería de
+  álgebra lineal — en un trazador de rayos eso es justamente la parte que
+  hay que mostrar.
 - Cuboides, cilindros, planos recortados, esferas y triángulos.
 - Materiales con textura, mapa de relieve, reflexión y refracción con
   **Fresnel** (aproximación de Schlick) y sombras translúcidas: el agua y el

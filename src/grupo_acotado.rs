@@ -1,5 +1,5 @@
 use crate::ray_intersect::{Intersect, RayIntersect};
-use nalgebra_glm::Vec3;
+use crate::vec3::Vec3;
 
 /// Un puñado de objetos metidos adentro de una caja acotante.
 ///

@@ -1,4 +1,4 @@
-use nalgebra_glm::Vec3;
+use crate::vec3::Vec3;
 use raylib::prelude::Color;
 
 /// A cuantos `alcance` de distancia una luz deja de aportar del todo.

@@ -1,5 +1,5 @@
 use crate::ray_intersect::{Intersect, RayIntersect};
-use nalgebra_glm::{dot, Vec3};
+use crate::vec3::{dot, Vec3};
 
 /// Un puñado de objetos metidos adentro de una esfera envolvente.
 ///

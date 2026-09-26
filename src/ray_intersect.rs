@@ -1,6 +1,6 @@
 use crate::material::Material;
 use crate::texture::Texture;
-use nalgebra_glm::Vec3;
+use crate::vec3::Vec3;
 use raylib::prelude::Color;
 use std::any::Any;
 

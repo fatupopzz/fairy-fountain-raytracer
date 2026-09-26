@@ -105,6 +105,7 @@ mod material;
 mod ray_intersect;
 mod sync;
 mod texture;
+mod vec3;
 /// Del modulo de cilindros la cueva usa solo el vertical; el orientado
 /// (los laseres del escenario anterior) se queda en el engine, y sin el
 /// `allow` seria un warning.
@@ -125,7 +126,7 @@ use framebuffer::Framebuffer;
 use grupo_acotado::GrupoAcotado;
 use light::Light;
 use material::Material;
-use nalgebra_glm::{cross, dot, normalize, Vec3};
+use crate::vec3::{cross, dot, normalize, Vec3};
 use plane::{Limite, Plane};
 use ray_intersect::{Intersect, RayIntersect};
 use raylib::prelude::*;
@@ -3084,7 +3085,7 @@ fn main() {
         //    columnas hacia la camara. La cancion no la toca (el analisis
         //    solo maneja las cinco primeras).
         Light::new(
-            nalgebra_glm::normalize(&cielo::LUNA_DIRECCION) * 40.0,
+            vec3::normalize(&cielo::LUNA_DIRECCION) * 40.0,
             color_f(0.75, 0.8, 1.0),
             0.4,
         )

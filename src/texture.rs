@@ -1,4 +1,4 @@
-use nalgebra_glm::{normalize, Vec3};
+use crate::vec3::{normalize, Vec3};
 use raylib::prelude::Color;
 use std::sync::Arc;
 

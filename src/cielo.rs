@@ -21,7 +21,7 @@
 //! donde bajan los god rays.
 
 use crate::texture::TextureImage;
-use nalgebra_glm::{normalize, Vec3};
+use crate::vec3::{normalize, Vec3};
 use raylib::prelude::Color;
 use std::f32::consts::PI;
 

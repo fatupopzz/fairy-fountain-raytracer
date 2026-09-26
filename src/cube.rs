@@ -1,6 +1,6 @@
 use crate::material::Material;
 use crate::ray_intersect::{Intersect, RayIntersect};
-use nalgebra_glm::Vec3;
+use crate::vec3::Vec3;
 
 /// Cubo alineado a los ejes (AABB), estilo Minecraft.
 ///

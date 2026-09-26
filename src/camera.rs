@@ -1,4 +1,4 @@
-use nalgebra_glm::{cross, normalize, Vec3};
+use crate::vec3::{cross, normalize, Vec3};
 
 /// Camara libre: una posicion y dos angulos.
 /// yaw gira a los lados, pitch mira arriba y abajo.

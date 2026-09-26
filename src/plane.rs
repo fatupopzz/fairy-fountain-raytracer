@@ -1,6 +1,6 @@
 use crate::material::Material;
 use crate::ray_intersect::{Intersect, RayIntersect};
-use nalgebra_glm::{dot, normalize, Vec3};
+use crate::vec3::{dot, normalize, Vec3};
 
 /// Hasta donde llega un plano con limite, alrededor de su `point`.
 #[derive(Clone, Copy, Debug)]

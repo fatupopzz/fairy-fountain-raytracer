@@ -1,6 +1,6 @@
 use crate::material::Material;
 use crate::ray_intersect::{Intersect, RayIntersect};
-use nalgebra_glm::{dot, normalize, Vec3};
+use crate::vec3::{dot, normalize, Vec3};
 use std::f32::consts::PI;
 
 pub struct Sphere {

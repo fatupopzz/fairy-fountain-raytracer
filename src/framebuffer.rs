@@ -1,5 +1,5 @@
 use crate::camera::Camera;
-use nalgebra_glm::{dot, normalize};
+use crate::vec3::{dot, normalize};
 use rayon::prelude::*;
 use raylib::prelude::*;
 
