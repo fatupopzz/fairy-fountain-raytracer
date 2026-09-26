@@ -1,7 +1,10 @@
 /target
 
-# Audio: el mp3 del concierto no va al repo (pesa y es material con derechos)
+# Audio: por defecto los mp3 no van al repo, salvo el unico que la escena
+# necesita para correr con musica. La copia con el nombre largo y el tema
+# del proyecto anterior (loser.mp3) quedan afuera: no los usa nadie.
 *.mp3
+!assets/music/fairy_fountain.mp3
 
 # Capturas y volcados que genera el programa, no son fuente
 foto_t*.png

@@ -3797,34 +3797,48 @@ fn main() {
         let foco = orbita.distancia_de_foco(params.cine) / Framebuffer::PROFUNDIDAD_MAXIMA;
         post.efectos(&mut d, &texture, &params, tiempo, foco);
 
-        // El HUD baja para no quedar encima de la banda del formato ancho.
-        let hud = 10 + (LETTERBOX_ALTO * params.cine * HEIGHT as f32) as i32;
-        d.draw_fps(10, hud);
-        d.draw_text(
-            &format!(
-                "{:>3.0}s / {:.0}s   {}",
-                tiempo.rem_euclid(analisis.duracion.max(1.0)),
-                analisis.duracion,
-                if reloj.hay_musica() { "" } else { "(sin musica)" }
-            ),
-            10,
-            hud + 24,
-            18,
-            Color::new(180, 120, 200, 255),
-        );
-        // Lo que cuesta el cuadro, a la vista. Es el numero que dice si la
-        // escena esta pesada, y sin verlo la unica forma de saberlo es
-        // contar los saltos a ojo.
-        d.draw_text(
-            &format!(
-                "{RENDER_W}x{RENDER_H} -> {WIDTH}x{HEIGHT}  ({:.0} ms)",
-                cuadro_medio * 1000.0
-            ),
-            10,
-            hud + 46,
-            18,
-            Color::new(120, 150, 190, 255),
-        );
+        // EL HUD NO SALE EN LAS FOTOS.
+        //
+        // El modo `--foto` existe para sacar la imagen final de la escena
+        // —para el informe, para el README, para mirarla— y una imagen con
+        // los cuadros por segundo y los milisegundos por cuadro encima no
+        // es la escena: es una captura de pantalla de un programa. Se
+        // estuvo sacando asi durante todo el desarrollo y todas las
+        // capturas quedaron con el contador quemado en la esquina.
+        //
+        // En vivo el HUD se queda, que es donde sirve: es el numero que
+        // dice si la escena esta pesada, y sin verlo la unica forma de
+        // saberlo es contar los saltos a ojo.
+        if foto.is_none() {
+            // El HUD baja para no quedar encima de la banda del formato ancho.
+            let hud = 10 + (LETTERBOX_ALTO * params.cine * HEIGHT as f32) as i32;
+            d.draw_fps(10, hud);
+            d.draw_text(
+                &format!(
+                    "{:>3.0}s / {:.0}s   {}",
+                    tiempo.rem_euclid(analisis.duracion.max(1.0)),
+                    analisis.duracion,
+                    if reloj.hay_musica() { "" } else { "(sin musica)" }
+                ),
+                10,
+                hud + 24,
+                18,
+                Color::new(180, 120, 200, 255),
+            );
+            // Lo que cuesta el cuadro, a la vista. Es el numero que dice si la
+            // escena esta pesada, y sin verlo la unica forma de saberlo es
+            // contar los saltos a ojo.
+            d.draw_text(
+                &format!(
+                    "{RENDER_W}x{RENDER_H} -> {WIDTH}x{HEIGHT}  ({:.0} ms)",
+                    cuadro_medio * 1000.0
+                ),
+                10,
+                hud + 46,
+                18,
+                Color::new(120, 150, 190, 255),
+            );
+        }
 
         // La ayuda: los primeros segundos y cuando se pide con H. Se
         // desvanece sola para no ensuciar la fuente.
