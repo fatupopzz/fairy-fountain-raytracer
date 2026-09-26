@@ -116,7 +116,18 @@ detectar) y el golpe del bajo.
   tapar la luz.
 - Los rayos se podan por contribución acumulada, no por profundidad: un camino
   que ya no puede cambiar ni un nivel de 255 no se sigue.
-- **Antialiasing temporal** con reproyección y recorte de vecindad.
+- **Oclusión ambiental** con dos rayos por impacto en el hemisferio
+  ponderado por el coseno. El largo máximo de cada rayo se sortea, y eso da
+  la caída con la distancia gratis: la probabilidad de que un oclusor a
+  distancia *d* bloquee un rayo es la probabilidad de que ese rayo haya
+  salido más largo que *d*.
+- **Reflejos rugosos**: el rayo reflejado se desvía según la rugosidad del
+  material, y el acumulador temporal promedia. Un espejo perfecto es lo que
+  sale gratis en un trazador y es justo lo que lo delata.
+- **Antialiasing temporal** con reproyección y recorte de vecindad. Es lo
+  que hace posibles los dos puntos anteriores: alcanza con un puñado de
+  muestras por cuadro porque el acumulador promedia las de los últimos
+  cuatro.
 
 ### El post-procesado (GLSL 330, en luz lineal)
 

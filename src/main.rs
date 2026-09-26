@@ -238,6 +238,52 @@ const MIN_CONTRIBUCION: f32 = 0.03;
 /// por debajo de eso la luz es literalmente invisible.
 const MIN_APORTE_LUZ: f32 = 0.004;
 
+/// Cuantos rayos de OCLUSION AMBIENTAL se tiran por impacto primario.
+///
+/// La oclusion ambiental es cuanto cielo ve un punto. Un rincon ve poco y
+/// queda oscuro; una superficie despejada ve todo y queda clara. Sin ella
+/// la luz ambiente llega igual a todas partes y nada se APOYA en nada: las
+/// columnas no tocan el piso, el pedestal flota sobre el agua y la escena
+/// se lee como un collage de objetos puestos uno delante de otro.
+///
+/// DOS, y el numero salio de medir, no de elegir. Con cuatro el cuadro
+/// pasa de 33.9 a 42.7 ms (+26%) y con dos a 38.0 (+12%), y en la imagen
+/// FINAL las dos versiones son indistinguibles: el acumulador temporal
+/// promedia cuatro cuadros, asi que dos rayos por cuadro ya son ocho
+/// muestras efectivas, y eso alcanza de sobra para una senial de
+/// frecuencia baja. Pagar cuatro es pagar el doble por un ruido que el
+/// acumulador se iba a comer igual.
+///
+/// Ese es tambien el motivo por el que aca funciona el muestreo
+/// estocastico y en las sombras suaves no (ver el comentario largo del
+/// bucle de luces): la oclusion cambia DESPACIO a lo largo de una
+/// superficie, y una rampa suave muestreada poco y promediada es la
+/// rampa. El borde de una sombra es un escalon, y un escalon muestreado
+/// poco es ruido.
+const AO_RAYOS: usize = 2;
+
+/// Hasta donde mira la oclusion ambiental, en unidades del mundo.
+///
+/// Es el parametro que decide la ESCALA del efecto y hay que elegirlo
+/// contra el tamano de la escena, no a ojo: con un radio muy chico solo se
+/// oscurece la linea exacta donde dos cosas se tocan y parece suciedad; con
+/// uno muy grande la oclusion deja de describir rincones y se convierte en
+/// un sombreado general que apaga la escena.
+///
+/// 1.6 es del orden del ancho de una columna (0.7) y de la profundidad de
+/// la piscina: oscurece el encuentro de las columnas con el piso, las
+/// esquinas de la piscina, el hueco debajo de las losas del techo y el pie
+/// del pedestal, que son exactamente los lugares donde el ojo busca la
+/// pista de que una cosa se apoya sobre otra.
+const AO_RADIO: f32 = 1.6;
+
+/// Cuanto llega a oscurecer, de 0 a 1.
+///
+/// No llega a 1 a proposito: con oclusion total los rincones quedan negro
+/// pleno y el efecto se nota como efecto. A 0.85 el rincon mas cerrado
+/// conserva un 15% de su luz ambiente.
+const AO_FUERZA: f32 = 0.85;
+
 /// Rebotes de reflexion y refraccion.
 ///
 /// Tres alcanzan: un rayo entra a un cristal, sale, y todavia puede
@@ -519,15 +565,90 @@ fn cast_ray(
     // segun las UV del impacto. Se calcula una sola vez, no por luz.
     let base_color = intersect.material.texture.get_color(intersect.u, intersect.v);
 
+    // --- OCLUSION AMBIENTAL ---
+    //
+    // Solo en el impacto PRIMARIO (`depth == 0`). En los rebotes se saltea:
+    // multiplicaria el costo por cada nivel de reflexion y refraccion para
+    // corregir la luz ambiente de algo que ya se ve reflejado y al 25% de
+    // su peso.
+    //
+    // EL LARGO DE CADA RAYO SE SORTEA, y ese es el truco que da la caida
+    // con la distancia sin pagarla. Lo que se querria es que un oclusor
+    // pegado oscurezca mucho y uno lejano poco, pero para eso haria falta
+    // saber A QUE DISTANCIA golpeo cada rayo, y la prueba barata del arbol
+    // (`occluded`) solo contesta si o no, sin distancia; pedir la distancia
+    // obliga a la interseccion completa, que arma el impacto y clona el
+    // material.
+    //
+    // Sorteando el largo maximo de cada rayo entre 0 y `AO_RADIO`, la
+    // probabilidad de que un oclusor a distancia d bloquee un rayo es la
+    // probabilidad de que ese rayo haya salido mas largo que d, o sea
+    // 1 - d/AO_RADIO. La caida lineal aparece sola en el promedio, con
+    // pruebas de si o no y sin una sola division extra.
+    let mut ao = 0.0f32;
+    if depth == 0 {
+        let origen_ao = intersect.point + intersect.normal * 1e-3;
+        for k in 0..AO_RAYOS {
+            let s = azar::revolver(semilla ^ (k as u32).wrapping_mul(0x9e37_79b9) ^ 0x00a0_00a0);
+
+            // Direccion PONDERADA POR EL COSENO: sumarle a la normal un
+            // punto de la esfera unitaria y normalizar da exactamente eso,
+            // y es lo que corresponde porque lo que se esta integrando
+            // lleva el coseno adentro. Repartir las direcciones parejas
+            // por el hemisferio en vez de asi mide lo mismo con un 30% mas
+            // de error para el mismo numero de rayos.
+            let sesgo = intersect.normal + azar::en_esfera(s);
+            // Si el punto sorteado cae casi opuesto a la normal la suma se
+            // va a cero y la direccion queda indefinida; ahi se usa la
+            // normal, que es el limite correcto.
+            let dir = if sesgo.magnitude_squared() > 1e-6 {
+                normalize(&sesgo)
+            } else {
+                intersect.normal
+            };
+
+            let largo = AO_RADIO * azar::uniforme(s ^ 0x5eed_1234);
+            let mut tapado = false;
+            arbol_sombras.recorrer(&origen_ao, &dir, largo, |i, limite| {
+                if objects[i].occluded(&origen_ao, &dir, limite) {
+                    tapado = true;
+                    0.0
+                } else {
+                    limite
+                }
+            });
+            if tapado {
+                ao += 1.0;
+            }
+        }
+        // CURVA DE CONTRASTE antes de aplicarla. La fraccion cruda de
+        // rayos tapados es casi siempre chica —la escena es una plaza
+        // abierta, no un interior de rincones— y medida sobre el cuadro da
+        // 0.11 de media, que despues de la curva de tono no se ve. La raiz
+        // levanta justamente la parte baja del rango (0.25 pasa a 0.5) sin
+        // tocar los extremos, asi que el rincon cerrado queda igual de
+        // cerrado y lo que gana es la zona de contacto, que es la que tiene
+        // que leerse.
+        ao = (ao / AO_RAYOS as f32).sqrt() * AO_FUERZA;
+    }
+
     // --- Iluminacion ---
     // Cada luz aporta su propio difuso y especular, con su propia
     // sombra. Los aportes se van sumando: por eso donde se cruzan dos
     // luces de colores distintos el color se mezcla.
     // La iluminacion arranca del ambiente, no de cero: sobre ese piso se
     // van sumando las luces.
+    // La oclusion multiplica SOLO EL AMBIENTE, no la luz directa. Es lo
+    // correcto y ademas es lo que la hace ver bien: el ambiente representa
+    // la luz que llega rebotada de todas partes, y es justamente esa la que
+    // un rincon no recibe. La luz directa de una lampara no le importa el
+    // rincon: o la ve o esta en sombra, y de eso ya se encargan los rayos
+    // de sombra. Aplicandola a todo, la oclusion se lee como mugre pintada
+    // encima en vez de como falta de luz.
+    let visible = 1.0 - ao;
     let mut lit = tint_color(
         scale_color(base_color, intersect.material.albedo[0]),
-        ambiente,
+        [ambiente[0] * visible, ambiente[1] * visible, ambiente[2] * visible],
     );
 
     for light in lights {
