@@ -185,14 +185,42 @@ const AMBIENTE_NOCHE: [f32; 3] = [0.20, 0.16, 0.30];
 /// de oscura a clara, pasa de violeta a durazno.
 const AMBIENTE_DIA: [f32; 3] = [0.62, 0.50, 0.44];
 
-/// El ambiente de este instante: entre los dos de arriba segun la hora.
-fn ambiente_de(luz_del_dia: f32) -> [f32; 3] {
+/// Y el ambiente de LA AURORA: el que tiene la cueva cuando el cielo se
+/// enciende sobre el clima sostenido de las voces (ver `SyncData::swell`).
+///
+/// LA AURORA SOLA NO ALCANZABA, y esto se midio: con la cortina encendida
+/// en el cielo, comparando el mismo cuadro con y sin ella, la aurora tocaba
+/// el 0.8% de los pixeles. El motivo es la escena, no la aurora: del cielo
+/// se ven los rincones entre columna y columna, porque el borde de roca del
+/// fondo y el techo tapan casi todo. Diecinueve segundos de voces
+/// sostenidas no pueden colgar del 0.8% del cuadro.
+///
+/// Asi que lo que entra en la cueva es la LUZ del cielo: el ambiente se
+/// corre del violeta de la noche a un verde azulado, que es el color de la
+/// base de la cortina. El ambiente ilumina TODO, incluido el dorso de las
+/// columnas y el techo por abajo, asi que el cuadro entero cambia de clima
+/// sin que se encienda una sola luz nueva.
+///
+/// Es un cambio de SESGO y no de cantidad, igual que entre la noche y el
+/// alba: la escena no pasa de oscura a clara, pasa de violeta a verde. Eso
+/// es lo que se puede hacer durante diecinueve segundos sin cansar.
+const AMBIENTE_AURORA: [f32; 3] = [0.17, 0.35, 0.33];
+
+/// El ambiente de este instante: entre los tres de arriba segun la hora y
+/// segun cuanto esten sosteniendo las voces.
+fn ambiente_de(luz_del_dia: f32, swell: f32) -> [f32; 3] {
     let d = luz_del_dia.clamp(0.0, 1.0);
-    let mezcla = |noche: f32, dia: f32| noche + (dia - noche) * d;
+    // La aurora no existe de dia (ver `Cielo::aurora`), asi que su tinte se
+    // apaga con la noche igual que ella.
+    let a = swell.clamp(0.0, 1.0) * (1.0 - d) * 0.75;
+    let mezcla = |noche: f32, dia: f32, aurora: f32| {
+        let hora = noche + (dia - noche) * d;
+        hora + (aurora - hora) * a
+    };
     [
-        mezcla(AMBIENTE_NOCHE[0], AMBIENTE_DIA[0]),
-        mezcla(AMBIENTE_NOCHE[1], AMBIENTE_DIA[1]),
-        mezcla(AMBIENTE_NOCHE[2], AMBIENTE_DIA[2]),
+        mezcla(AMBIENTE_NOCHE[0], AMBIENTE_DIA[0], AMBIENTE_AURORA[0]),
+        mezcla(AMBIENTE_NOCHE[1], AMBIENTE_DIA[1], AMBIENTE_AURORA[1]),
+        mezcla(AMBIENTE_NOCHE[2], AMBIENTE_DIA[2], AMBIENTE_AURORA[2]),
     ]
 }
 
@@ -2408,7 +2436,7 @@ fn llama(t: f32, semilla: u32) -> f32 {
 fn avanzar_noche(cielo: &mut Cielo, lights: &mut [Light], p: &SceneParams) {
     // `Cielo` solo sabe de resplandor del horizonte, y cuanto resplandor
     // hay es exactamente cuanta luz de dia hay.
-    cielo.ajustar(p.giro_cielo, p.luz_del_dia, p.tiempo, &p.ataques);
+    cielo.ajustar(p.giro_cielo, p.luz_del_dia, p.tiempo, &p.estrellas, p.swell);
 
     if let Some(luna) = lights.get_mut(LUZ_LUNA) {
         luna.position = cielo.luna() * 40.0;
@@ -3616,8 +3644,8 @@ fn main() {
             .unwrap_or(2.0);
 
         println!(
-            "\n{:>7}  {:>5} {:>5} {:>5} {:>5}  {:>3}  {:>5} {:>5}  {:^12} {:^4}  haces",
-            "t", "bass", "mid", "high", "total", "on", "bloom", "hadas", "do..si", "crist"
+            "\n{:>7}  {:>5} {:>5} {:>5} {:>5}  {:>3}  {:>5} {:>5} {:>5}  {:^12} {:^4}  haces",
+            "t", "bass", "mid", "high", "total", "on", "bloom", "hadas", "swell", "do..si", "crist"
         );
 
         let mut t = 0.0f32;
@@ -3669,14 +3697,15 @@ fn main() {
                 .collect();
 
             println!(
-                "{t:7.1}  {:5.2} {:5.2} {:5.2} {:5.2}  {:>3}  {:5.2} {:5.2}  [{notas}] [{cristales}]  [{barra}]",
+                "{t:7.1}  {:5.2} {:5.2} {:5.2} {:5.2}  {:>3}  {:5.2} {:5.2} {:5.2}  [{notas}] [{cristales}]  [{barra}]",
                 f.bass,
                 f.mid,
                 f.high,
                 f.total,
                 if f.onset { "SI" } else { "" },
                 p.bloom_strength,
-                p.orb_emission
+                p.orb_emission,
+                p.swell
             );
 
             t += paso;
@@ -3691,6 +3720,7 @@ fn main() {
         // es la otra cosa que un cuadro no puede contestar: una estela es un
         // evento, y en una foto o esta cruzando o no esta.
         let mut salidas: Vec<(usize, f32)> = Vec::new();
+        let mut fugaces: Vec<(usize, f32)> = Vec::new();
 
         while t < analisis.duracion {
             let p = analisis.get_scene_params(t);
@@ -3702,6 +3732,11 @@ fn main() {
                     salidas.push(salida);
                 }
             }
+            for &salida in &p.estrellas {
+                if !fugaces.contains(&salida) {
+                    fugaces.push(salida);
+                }
+            }
             total += 1.0;
             t += 1.0 / 60.0;
         }
@@ -3710,27 +3745,33 @@ fn main() {
             prendidos / total * 100.0
         );
 
-        salidas.sort_by(|a, b| a.1.total_cmp(&b.1));
-        let huecos: Vec<f32> = salidas.windows(2).map(|w| w[1].1 - w[0].1).collect();
-        let mayor = huecos.iter().copied().fold(0.0f32, f32::max);
-        let medio = huecos.iter().sum::<f32>() / huecos.len().max(1) as f32;
-        println!(
-            "{} estelas, una cada {medio:.1} s de media, hueco mas largo {mayor:.1} s",
-            salidas.len()
-        );
-        // El reparto a lo largo del tema, de veinte en veinte segundos: es
-        // donde se ve si el ritmo tiene arco o es un metronomo.
-        print!("reparto cada 20 s:");
-        let mut desde = 0.0f32;
-        while desde < analisis.duracion {
-            let cuantas = salidas
-                .iter()
-                .filter(|(_, t)| (desde..desde + 20.0).contains(t))
-                .count();
-            print!(" {cuantas}");
-            desde += 20.0;
-        }
-        println!();
+        // El ritmo de las dos cosas que la cancion lanza: las estelas del
+        // arpa adentro de la cueva y las estrellas fugaces en el cielo.
+        let ritmo = |que: &str, mut cuando: Vec<(usize, f32)>| {
+            cuando.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let huecos: Vec<f32> = cuando.windows(2).map(|w| w[1].1 - w[0].1).collect();
+            let mayor = huecos.iter().copied().fold(0.0f32, f32::max);
+            let medio = huecos.iter().sum::<f32>() / huecos.len().max(1) as f32;
+            println!(
+                "{} {que}, una cada {medio:.1} s de media, hueco mas largo {mayor:.1} s",
+                cuando.len()
+            );
+            // El reparto a lo largo del tema, de veinte en veinte segundos:
+            // es donde se ve si el ritmo tiene arco o es un metronomo.
+            print!("   reparto cada 20 s:");
+            let mut desde = 0.0f32;
+            while desde < analisis.duracion {
+                let cuantas = cuando
+                    .iter()
+                    .filter(|(_, t)| (desde..desde + 20.0).contains(t))
+                    .count();
+                print!(" {cuantas}");
+                desde += 20.0;
+            }
+            println!();
+        };
+        ritmo("estelas del arpa", salidas);
+        ritmo("estrellas fugaces", fugaces);
         return;
     }
 
@@ -3762,7 +3803,7 @@ fn main() {
         let mut movimiento = 0.0f32;
         let mut costo_acum = 0.0f64;
         let mut cam = orbita.camara(2.0);
-        let mut ambiente_ultimo = ambiente_de(0.0);
+        let mut ambiente_ultimo = ambiente_de(0.0, 0.0);
         let mut fase_agua_ultima = 0.0f32;
 
         for n in 0..CUADROS {
@@ -3776,7 +3817,7 @@ fn main() {
             // La referencia de mas abajo se traza fuera de este bucle y
             // tiene que usar EXACTAMENTE la misma luz, o la comparacion
             // mediria el cambio de hora en vez del antialiasing.
-            ambiente_ultimo = ambiente_de(params.luz_del_dia);
+            ambiente_ultimo = ambiente_de(params.luz_del_dia, params.swell);
             fase_agua_ultima = params.tiempo * animacion::AGUA_VELOCIDAD;
             fb.clear();
             render_rows(
@@ -3844,7 +3885,7 @@ fn main() {
             let t0 = std::time::Instant::now();
             render_rows(
                 &mut fb, &objects, &cielo, &arbol, &arbol_sombras, &lights, &cam, MAX_DEPTH,
-                false, (0.5, 0.5), ambiente_de(params.luz_del_dia),
+                false, (0.5, 0.5), ambiente_de(params.luz_del_dia, params.swell),
                 params.tiempo * animacion::AGUA_VELOCIDAD, 0, 0, h,
             );
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -3859,7 +3900,7 @@ fn main() {
             let t1 = std::time::Instant::now();
             render(
                 &mut fb, &objects, &cielo, &arbol, &arbol_sombras, &lights, &cam, MAX_DEPTH,
-                false, (0.5, 0.5), ambiente_de(params.luz_del_dia),
+                false, (0.5, 0.5), ambiente_de(params.luz_del_dia, params.swell),
                 params.tiempo * animacion::AGUA_VELOCIDAD, 0, || {},
             );
             let ms_bandas = t1.elapsed().as_secs_f64() * 1000.0;
@@ -4122,7 +4163,7 @@ fn main() {
             MAX_DEPTH,
             antialias,
             jitter,
-            ambiente_de(params.luz_del_dia),
+            ambiente_de(params.luz_del_dia, params.swell),
             params.tiempo * animacion::AGUA_VELOCIDAD,
             cuadro_taa,
             || reloj.actualizar(),

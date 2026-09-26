@@ -53,8 +53,28 @@ const TITILEO_VELOCIDAD: f32 = 0.9;
 /// que en un cuadro de 45 grados de campo seria un punto).
 const LUNA_RADIO: f32 = 0.045;
 
-/// Uno de cada cuantos ataques del arpa lanza una estrella. Ver `ajustar`.
-const ESTRELLA_CADA: usize = 6;
+/// HASTA DONDE SUBE LA AURORA, en radianes: unos doce grados.
+///
+/// El numero sale de DONDE SE VE EL CIELO, que en esta escena es una franja
+/// angosta: la camara mira un poco hacia abajo, el borde de arriba del
+/// cuadro queda a unos ocho grados de elevacion (por eso la luna esta a
+/// once, ver `LUNA_DIRECCION`) y por abajo el borde de roca y el techo de
+/// la fuente tapan el horizonte. O sea que lo que se ve del cielo va de
+/// unos tres grados a unos ocho.
+///
+/// La primera version tenia la cortina hasta los cinco grados, con lo mas
+/// encendido pegado al suelo. En cuadro no se veia: la parte brillante
+/// quedaba detras de la roca y lo que asomaba por arriba era el borde
+/// donde la cortina ya se esta apagando, o sea un velo verdoso sin forma.
+/// Subida a doce grados, con el lomo a los cuatro, lo que entra en la
+/// franja visible es el CUERPO.
+const AURORA_ALTO: f32 = 0.21;
+
+/// Cuanto ondula el borde de arriba de la cortina, en radianes.
+const AURORA_ONDA: f32 = 0.06;
+
+/// A que fraccion del alto esta el lomo de la cortina.
+const AURORA_LOMO: f32 = 0.35;
 
 /// Cuanto dura una estrella fugaz, en segundos.
 const ESTRELLA_VIDA: f32 = 1.9;
@@ -103,6 +123,9 @@ pub struct Cielo {
     /// trayectorias distintas segun lo cargada que estuviera la escena, y
     /// ademas irian mas lentas justamente en los momentos mas intensos.
     estrellas: Vec<(u32, f32)>,
+    /// EL "AAAAA", de 0 a 1: cuanto esta la cancion sostenida en vez de
+    /// tocada. Es lo unico que enciende la aurora. Ver `SyncData::swell`.
+    swell: f32,
 }
 
 impl Cielo {
@@ -213,43 +236,109 @@ impl Cielo {
             tiempo: 0.0,
             amanecer: 0.0,
             estrellas: Vec::new(),
+            swell: 0.0,
         }
     }
 
     /// Deja el cielo en el estado de este cuadro: girado `giro` radianes y
     /// con `amanecer` de resplandor en el horizonte. Se llama una vez por
     /// cuadro, antes de trazar.
-    pub fn ajustar(&mut self, giro: f32, amanecer: f32, tiempo: f32, ataques: &[(usize, f32)]) {
+    pub fn ajustar(
+        &mut self,
+        giro: f32,
+        amanecer: f32,
+        tiempo: f32,
+        estrellas: &[(usize, f32)],
+        swell: f32,
+    ) {
         self.giro = giro;
         self.amanecer = amanecer.clamp(0.0, 1.0);
         self.tiempo = tiempo;
+        self.swell = swell.clamp(0.0, 1.0);
 
-        // QUE ATAQUES DEL ARPA SE CONVIERTEN EN ESTRELLA.
+        // QUE SALIDAS ESTAN VIVAS AHORA.
         //
-        // Uno de cada `ESTRELLA_CADA`, no todos. El tema tiene 351 ataques
-        // en tres minutos y en sus tramos mas densos pasan de tres por
-        // segundo: con una estrella por ataque el cielo seria una lluvia
-        // de meteoros constante, y una estrella fugaz que pasa todo el
-        // tiempo deja de ser una estrella fugaz. Tomando uno de cada seis
-        // caen unas seis por minuto, que es raro y esperable a la vez, que
-        // es lo que hace que uno las mire.
-        //
-        // El filtro va sobre el INDICE del ataque y no sobre un reloj, asi
-        // que sigue siendo funcion pura de la cancion: el mismo tema da
-        // siempre las mismas estrellas en los mismos instantes.
+        // CUALES son ya no se decide aca. Era "uno de cada seis ataques del
+        // arpa", y ese filtro es aritmetico y no musical: no sabe de compas
+        // ni de frase, y en este tema, que tiene diecinueve segundos de
+        // voces sostenidas sin una sola pua, dejaba al cielo TREINTA Y SEIS
+        // SEGUNDOS sin una estrella justo sobre el climax. Ahora las elige
+        // `SyncData::estrellas_hasta`, que las pone en el tercer tiempo del
+        // compas, y aca solo se descarta lo que ya cruzo.
         self.estrellas.clear();
-        for &(numero, t_ataque) in ataques {
-            if numero % ESTRELLA_CADA != 0 {
-                continue;
-            }
-            let edad = tiempo - t_ataque;
+        for &(numero, t_salida) in estrellas {
+            let edad = tiempo - t_salida;
             if (0.0..ESTRELLA_VIDA).contains(&edad) {
                 self.estrellas.push((numero as u32, edad));
             }
         }
     }
 
-    /// Si la direccion apunta a la luna o a su halo.
+    /// LA AURORA: el cielo cantando el "aaaaa".
+    ///
+    /// Devuelve cuanta aurora hay en esta direccion, de 0 a 1, y a que
+    /// altura de la cortina esta (0 abajo, 1 en el borde de arriba), que es
+    /// lo que decide el color.
+    ///
+    /// POR QUE UNA AURORA Y NO MAS METEOROS. El tramo de las voces es lo
+    /// mas grande del tema y era lo mas quieto de la escena. La tentacion
+    /// es llenarlo de eventos, pero un evento es un ataque —aparece,
+    /// golpea y se va— y ahi no hay ataques: hay UNA nota sostenida
+    /// diecinueve segundos. Lo que se parece a eso es algo grande que
+    /// esta y respira, no veinte cosas chicas que pasan. Por eso, ademas,
+    /// mientras la aurora esta arriba el cielo lanza la mitad de estrellas
+    /// fugaces (ver `SyncData::estrellas_hasta`): dos cosas grandes a la
+    /// vez se tapan.
+    ///
+    /// LA FORMA: una cortina que sube desde el horizonte hasta
+    /// `AURORA_ALTO`, con el borde de arriba ondulado por tres senos de
+    /// frecuencias distintas —uno ancho que da la panza, uno medio que la
+    /// quiebra y uno corto que le saca la simetria—, y estriada en
+    /// vertical, que es lo que hace que se lea como una cortina y no como
+    /// niebla. Todo deriva LENTO: la cortina entera se corre menos de dos
+    /// grados por segundo, asi que en cuadro se ve moverse sin que se vea
+    /// pasar.
+    ///
+    /// Es todo funcion de la direccion y del segundo, como el resto del
+    /// cielo: cinco senos por rayo, y solo cuando el swell esta arriba.
+    fn aurora(&self, azimut: f32, elevacion: f32) -> (f32, f32) {
+        if elevacion < -0.015 {
+            return (0.0, 0.0);
+        }
+
+        let deriva = self.tiempo * 0.035;
+        let onda = (azimut * 2.0 + deriva * 1.7).sin() * 0.55
+            + (azimut * 5.0 - deriva * 2.3).sin() * 0.30
+            + (azimut * 11.0 + deriva * 3.1).sin() * 0.15;
+
+        let alto = AURORA_ALTO + AURORA_ONDA * onda;
+        if elevacion > alto {
+            return (0.0, 0.0);
+        }
+        let subida = (elevacion / alto.max(1e-3)).clamp(0.0, 1.0);
+
+        // El cuerpo de la cortina: crece rapido desde el suelo hasta el lomo
+        // y despues se apaga contra el borde de arriba. El lomo cae a los
+        // cuatro grados, que es donde el borde de roca deja de tapar.
+        let cuerpo =
+            (subida / AURORA_LOMO).min(1.0) * (1.0 - subida).powf(1.2) * 1.6;
+
+        // Las estrias, que son lo que la hace una CORTINA y no niebla de
+        // color. La fase lleva la onda adentro, asi que no son rayas
+        // paralelas: se doblan con ella.
+        let estrias = 0.55 + 0.45 * (azimut * 48.0 + onda * 2.5 + deriva).sin().abs();
+
+        // Y NO DA LA VUELTA ENTERA: un lobulo ancho deja un lado del cielo
+        // encendido y el otro casi limpio. Una aurora pareja en los
+        // trescientos sesenta grados se lee como un filtro de color.
+        let lobulo = 0.35 + 0.65 * (0.5 + 0.5 * (azimut - deriva * 2.0).sin());
+
+        // Y RESPIRA: un ciclo cada once segundos, montado sobre el swell.
+        let respira = 0.80 + 0.20 * (self.tiempo * 0.57).sin();
+
+        (cuerpo * estrias * lobulo * respira * self.swell, subida)
+    }
+
     fn cerca_de_la_luna(&self, d: &Vec3) -> bool {
         // `d` ya viene con el giro deshecho, asi que se compara contra la
         // luna en su posicion de origen.
@@ -424,6 +513,26 @@ impl Cielo {
             let f = 0.825 + (self.tiempo * TITILEO_VELOCIDAD + fase).sin() * 0.175;
             let canal = |c: u8| (c as f32 * f) as u8;
             noche = Color::new(canal(noche.r), canal(noche.g), canal(noche.b), 255);
+        }
+
+        // LA AURORA, cuando las voces se sostienen. Va encima del cielo
+        // horneado y debajo de las estrellas fugaces, que es lo que es: un
+        // velo de luz, no un objeto. Se apaga con el dia por lo mismo que
+        // las fugaces, aunque en este tema el swell cae entero de noche.
+        //
+        // El angulo no se vuelve a calcular: `u` y `v` YA son la longitud y
+        // la latitud de la direccion, asi que salen de dos multiplicaciones
+        // y no de un `atan2` y un `asin` mas por rayo.
+        if self.swell > 0.0 && self.amanecer < 0.95 {
+            let (fuerza, subida) = self.aurora((u - 0.5) * 2.0 * PI, (0.5 - v) * PI);
+            if fuerza > 0.0 {
+                let f = fuerza * (1.0 - self.amanecer);
+                // Teal abajo y magenta arriba: la paleta de la fuente, que
+                // es de donde tiene que parecer que viene la luz.
+                let (r, g, b) = mezcla((70.0, 235.0, 170.0), (215.0, 110.0, 250.0), subida);
+                let suma = |base: u8, c: f32| (base as f32 + c * f).min(255.0) as u8;
+                noche = Color::new(suma(noche.r, r), suma(noche.g, g), suma(noche.b, b), 255);
+            }
         }
 
         // LAS ESTRELLAS FUGACES, sumadas encima de todo.
@@ -603,11 +712,11 @@ mod tests {
         let mut cielo = Cielo::generar();
         let horizonte = direccion(1.0, 0.03);
         let noche = cielo.color(&horizonte);
-        cielo.ajustar(0.0, 1.0, 0.0, &[]);
+        cielo.ajustar(0.0, 1.0, 0.0, &[], 0.0);
         let alba = cielo.color(&horizonte);
         assert!(alba.r > noche.r + 60 && alba.r > alba.b);
 
-        cielo.ajustar(0.6, 0.0, 0.0, &[]);
+        cielo.ajustar(0.6, 0.0, 0.0, &[], 0.0);
         let luna = cielo.luna();
         assert!((luna - normalize(&LUNA_DIRECCION)).magnitude() > 0.3);
         // Mirando a donde esta la luna ahora, se la ve.
@@ -640,7 +749,7 @@ mod tests {
         let mut min = i32::MAX;
         let mut max = i32::MIN;
         for paso in 0..24 {
-            cielo.ajustar(0.0, 0.0, paso as f32 * 0.3, &[]);
+            cielo.ajustar(0.0, 0.0, paso as f32 * 0.3, &[], 0.0);
             let b = brillo(&cielo, &estrella);
             min = min.min(b);
             max = max.max(b);
@@ -649,9 +758,9 @@ mod tests {
 
         // La luna se queda quieta.
         let luna = normalize(&LUNA_DIRECCION);
-        cielo.ajustar(0.0, 0.0, 0.0, &[]);
+        cielo.ajustar(0.0, 0.0, 0.0, &[], 0.0);
         let a = brillo(&cielo, &luna);
-        cielo.ajustar(0.0, 0.0, 1.8, &[]);
+        cielo.ajustar(0.0, 0.0, 1.8, &[], 0.0);
         assert_eq!(a, brillo(&cielo, &luna));
     }
 
@@ -677,13 +786,13 @@ mod tests {
             .collect();
         let brillo = |c: Color| c.r as i32 + c.g as i32 + c.b as i32;
 
-        cielo.ajustar(0.0, 0.0, 0.0, &[]);
+        cielo.ajustar(0.0, 0.0, 0.0, &[], 0.0);
         let sin: Vec<i32> = malla.iter().map(|d| brillo(cielo.color(d))).collect();
 
         // Con una estrella a la mitad de su vida, que es cuando mas
-        // brilla. El ataque numero 0 pasa el filtro de `ESTRELLA_CADA`.
+        // brilla. Las salidas llegan ya elegidas desde el analisis.
         let t = ESTRELLA_VIDA * 0.5;
-        cielo.ajustar(0.0, 0.0, t, &[(0, 0.0)]);
+        cielo.ajustar(0.0, 0.0, t, &[(0, 0.0)], 0.0);
         assert_eq!(cielo.estrellas.len(), 1, "no se armo la estrella");
         let con: Vec<i32> = malla.iter().map(|d| brillo(cielo.color(d))).collect();
 
@@ -707,11 +816,57 @@ mod tests {
     #[test]
     fn la_estrella_fugaz_no_existe_fuera_de_su_vida() {
         let mut cielo = Cielo::generar();
-        cielo.ajustar(0.0, 0.0, ESTRELLA_VIDA + 0.5, &[(0, 0.0)]);
+        cielo.ajustar(0.0, 0.0, ESTRELLA_VIDA + 0.5, &[(0, 0.0)], 0.0);
         assert!(cielo.estrellas.is_empty(), "sigue viva pasada su vida");
 
-        cielo.ajustar(0.0, 0.0, -1.0, &[(0, 0.0)]);
+        cielo.ajustar(0.0, 0.0, -1.0, &[(0, 0.0)], 0.0);
         assert!(cielo.estrellas.is_empty(), "existe antes de lanzarse");
+    }
+
+    /// LA AURORA: existe solo con las voces, vive pegada al horizonte y no
+    /// toca el cenit.
+    ///
+    /// Lo de la altura no es un detalle de gusto: la franja de cielo que se
+    /// ve por encima del borde de roca son unos siete grados, asi que una
+    /// aurora que se fuera para arriba no se veria nunca en cuadro.
+    #[test]
+    fn la_aurora_sale_con_las_voces_y_se_queda_abajo() {
+        let mut cielo = Cielo::generar();
+
+        let banda: Vec<Vec3> = (0..360)
+            .map(|a| direccion(a as f32 / 360.0 * std::f32::consts::TAU, 0.03))
+            .collect();
+        let alto: Vec<Vec3> = (0..360)
+            .map(|a| direccion(a as f32 / 360.0 * std::f32::consts::TAU, 0.9))
+            .collect();
+        let brillo = |c: &Cielo, ds: &[Vec3]| -> i32 {
+            ds.iter().map(|d| { let x = c.color(d); x.r as i32 + x.g as i32 + x.b as i32 }).sum()
+        };
+
+        cielo.ajustar(0.0, 0.0, 130.0, &[], 0.0);
+        let (bajo_sin, alto_sin) = (brillo(&cielo, &banda), brillo(&cielo, &alto));
+
+        cielo.ajustar(0.0, 0.0, 130.0, &[], 1.0);
+        let (bajo_con, alto_con) = (brillo(&cielo, &banda), brillo(&cielo, &alto));
+
+        assert!(
+            bajo_con > bajo_sin + 3000,
+            "la aurora no enciende el horizonte: {bajo_sin} -> {bajo_con}"
+        );
+        assert_eq!(alto_con, alto_sin, "la aurora llego al cenit, tiene que quedarse abajo");
+
+        // Y NO ES UN FILTRO DE COLOR: la cortina tiene lados. Mirando los
+        // 360 grados de la banda baja, el azimut mas encendido tiene que
+        // sacarle mucho al mas apagado.
+        let por_azimut: Vec<i32> = banda
+            .iter()
+            .map(|d| { let c = cielo.color(d); c.r as i32 + c.g as i32 + c.b as i32 })
+            .collect();
+        let (mas, menos) = (
+            *por_azimut.iter().max().unwrap(),
+            *por_azimut.iter().min().unwrap(),
+        );
+        assert!(mas > menos * 2, "la aurora esta pareja en todo el cielo: {menos} a {mas}");
     }
 
     #[test]

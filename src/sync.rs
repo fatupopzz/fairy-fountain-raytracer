@@ -26,6 +26,14 @@
 use crate::vec3::Vec3;
 use std::fs;
 
+/// La curva en S de siempre: 0 debajo de 0, 1 encima de 1, y las dos puntas
+/// con pendiente cero para que nada arranque ni termine con un borde
+/// visible.
+fn suave(x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
 /// Cuantos haces de laser tiene la escena.
 pub const LASERES: usize = 8;
 
@@ -40,6 +48,9 @@ pub const ATAQUES_VENTANA: f32 = 60.0;
 /// se pregunta la escena es cuales estan cruzando AHORA: con
 /// `ESTELA_VIDA = 1.5` sobra el doble.
 pub const ESTELAS_VENTANA: f32 = 3.0;
+
+/// Lo mismo para las estrellas fugaces, que viven `ESTRELLA_VIDA` (1.9 s).
+pub const ESTRELLAS_VENTANA: f32 = 3.5;
 
 /// Donde se busca el analisis, en orden. La primera que exista, gana.
 pub const RUTAS_SYNC: [&str; 3] = [
@@ -804,6 +815,103 @@ impl SyncData {
         salidas
     }
 
+    /// HACE CUANTO QUE NO PEGA EL ARPA, en segundos, mirando como mucho
+    /// `ALCANCE` segundos hacia atras.
+    ///
+    /// Es la otra mitad de `swell`: la energia sola no distingue un acorde
+    /// rasgueado de una voz sostenida, y lo que separa a los dos es si
+    /// alguien esta ATACANDO la cuerda o no.
+    fn desde_el_ultimo_ataque(&self, t: f32) -> f32 {
+        const ALCANCE: f32 = 6.0;
+
+        if self.frames.is_empty() {
+            return ALCANCE;
+        }
+        let fps = self.fps as f32;
+        let hasta = ((t.max(0.0) * fps) as usize).min(self.frames.len() - 1);
+        let desde = hasta.saturating_sub((ALCANCE * fps) as usize);
+
+        for k in (desde..=hasta).rev() {
+            if self.frames[k].onset {
+                return t - self.frames[k].t;
+            }
+        }
+        ALCANCE
+    }
+
+    /// EL "AAAAA": cuanto esta la cancion SOSTENIDA en vez de tocada, de 0
+    /// a 1.
+    ///
+    /// Este tema tiene, pasado el minuto y medio, un tramo de diecinueve
+    /// segundos (del 128.1 al 147.3) en el que las voces se sostienen y el
+    /// arpa no pega una sola vez. Es el climax, y hasta ahora era el unico
+    /// tramo del tema en el que la escena se quedaba QUIETA: todo lo que se
+    /// mueve aca colgaba, de una manera o de otra, del ataque del arpa, y
+    /// donde no hay ataques no habia nada. El cielo llegaba a tener cero
+    /// estrellas fugaces durante treinta y seis segundos justo ahi.
+    ///
+    /// Se arma multiplicando dos cosas que por separado no alcanzan:
+    ///   - que haya ENERGIA, medida con el sobre lento de dos segundos y
+    ///     medio: sin esto, cualquier silencio del arpa contaria como
+    ///     swell, y el tema abre con el arpa sola y mucho aire;
+    ///   - que NO HAYA PUA: sin esto, un acorde rasgueado fuerte cuenta lo
+    ///     mismo que una voz sostenida, que es justo lo que no se quiere
+    ///     distinguir mal.
+    ///
+    /// Las dos entran por una curva en S y no por un umbral, asi que el
+    /// swell sube y baja en un par de segundos en vez de encenderse de
+    /// golpe. Y las dos se leen del analisis, o sea que esto sigue siendo
+    /// funcion pura de `t`.
+    fn swell(&self, t: f32) -> f32 {
+        // Los cortes estan escalados a este tema: la energia total promedia
+        // 0.175 y en el climax llega a 0.70.
+        let sostenido = suave((self.energia_suave(t, 2.5) - 0.20) / 0.20);
+        // Menos de un segundo y pico desde la ultima pua no es un sostenido:
+        // es la cola de la nota. A los tres segundos y pico ya lo es.
+        let sin_pua = suave((self.desde_el_ultimo_ataque(t) - 1.2) / 2.0);
+        sostenido * sin_pua
+    }
+
+    /// CUANDO CRUZA UNA ESTRELLA FUGAZ: como las estelas, pero en el TERCER
+    /// tiempo del compas.
+    ///
+    /// Las dos cosas salian de "uno de cada N ataques" y las dos heredaban
+    /// el mismo problema (ver `estelas_hasta`): 59 estrellas reparejas en
+    /// papel, pero un hueco de TREINTA Y SEIS SEGUNDOS sin una sola,
+    /// justamente sobre el climax.
+    ///
+    /// EN EL TRES Y NO EN EL UNO a proposito: el uno ya es de las estelas
+    /// del arpa, que cruzan la fuente. Cayendo las dos cosas en el mismo
+    /// tiempo se verian como un solo evento con dos partes; a dos tiempos
+    /// de distancia se leen como una llamada y una respuesta, una adentro
+    /// de la cueva y otra en el cielo.
+    ///
+    /// Y CUANDO ENTRAN LAS VOCES, MENOS: con el swell arriba, el cielo pasa
+    /// de una cada dos compases a una cada cuatro. No es para ahorrar
+    /// trabajo sino porque ahi el cielo tiene otra cosa que hacer (la
+    /// aurora, ver `Cielo::aurora`), y dos cosas grandes a la vez no son el
+    /// doble de impresionantes: se tapan.
+    fn estrellas_hasta(&self, t: f32, ventana: f32) -> Vec<(usize, f32)> {
+        const TIEMPOS: usize = 4;
+
+        let mut salidas = Vec::new();
+
+        for (i, &beat) in self.beats.iter().enumerate().skip(2).step_by(TIEMPOS) {
+            if beat > t {
+                break;
+            }
+            if beat < t - ventana {
+                continue;
+            }
+            let cada = if self.swell(beat) > 0.5 { 4 } else { 2 };
+            if (i / TIEMPOS) % cada == 0 {
+                salidas.push((i, beat));
+            }
+        }
+
+        salidas
+    }
+
     /// Cada cuantos compases sale una estela, segun la energia del momento.
     ///
     /// Los cortes estan escalados a ESTE tema, que es suave: la energia
@@ -1122,6 +1230,9 @@ impl SyncData {
         // fuente. Se calcula una sola vez porque lo piden cinco campos.
         let dia = self.luz_del_dia(t);
         let noche = 1.0 - dia;
+        // EL "AAAAA". Se calcula una sola vez: lo piden el campo, la niebla
+        // y las estrellas fugaces.
+        let swell = self.swell(t);
         // El factor por el que se multiplican las luces de la FUENTE.
         let del_dia = 0.42 + 0.58 * noche;
 
@@ -1213,8 +1324,18 @@ impl SyncData {
             // del cielo; si el cielo esta rosa y la niebla azul, el cuadro
             // se parte en dos y no se cree ninguno de los dos.
             fog_color: {
-                seccion.color_niebla() * (1.0 - dia * 0.72)
-                    + Vec3::new(0.46, 0.24, 0.26) * (dia * 0.72)
+                let hora = seccion.color_niebla() * (1.0 - dia * 0.72)
+                    + Vec3::new(0.46, 0.24, 0.26) * (dia * 0.72);
+                // Y CON LAS VOCES, EL COLOR DEL CIELO ES LA AURORA. Es el
+                // mismo argumento del parrafo de arriba llevado hasta el
+                // final: si el aire toma el color del cielo, y arriba hay
+                // una cortina verde encendida diecinueve segundos, el aire
+                // de la cueva tiene que ponerse verde. Y es lo que hace que
+                // el swell se vea aunque del cielo se vean solo los huecos
+                // entre columna y columna: la niebla si esta en todo el
+                // cuadro.
+                let aurora = Vec3::new(0.07, 0.26, 0.21);
+                hora + (aurora - hora) * (swell * noche * 0.70)
             },
             // LAS LUCES SON LO QUE MAS SE VE DE LA CANCION.
             //
@@ -1310,6 +1431,8 @@ impl SyncData {
             tiempo: t,
             ataques: self.ataques_hasta(t, ATAQUES_VENTANA),
             estelas: self.estelas_hasta(t, ESTELAS_VENTANA),
+            estrellas: self.estrellas_hasta(t, ESTRELLAS_VENTANA),
+            swell,
             laser_emissions,
             camera_target_y: self.mira_y_suave(t),
             color_shift: seccion.tinte(),
@@ -1465,6 +1588,13 @@ pub struct SceneParams {
     /// lo que la cancion HIZO y esto es el COMPAS, que es lo unico parejo de
     /// punta a punta (ver `SyncData::estelas_hasta`).
     pub estelas: Vec<(usize, f32)>,
+    /// Los tiempos que lanzan una estrella fugaz, igual que `estelas` pero
+    /// en el tercer tiempo del compas (ver `SyncData::estrellas_hasta`).
+    pub estrellas: Vec<(usize, f32)>,
+    /// EL "AAAAA", de 0 a 1: cuanto esta la cancion sostenida en vez de
+    /// tocada. Es lo que enciende la aurora del cielo. Ver
+    /// `SyncData::swell`.
+    pub swell: f32,
     /// La emision de cada haz, INDIVIDUAL: el chase los enciende de a uno.
     pub laser_emissions: [f32; LASERES],
     /// A que altura mira la camara. Lo pide el loop de render, que ya tenia

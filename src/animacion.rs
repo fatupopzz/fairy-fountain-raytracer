@@ -468,29 +468,43 @@ fn actualizar_estelas(
         let datos = vivas.get(ranura).copied();
         let hijos = grupo.children_mut();
 
-        let (cabeza, cola, vida, color_cabeza, color_cola) = match datos {
-            None => (Vec3::zeros(), Vec3::zeros(), 0.0, Color::BLACK, Color::BLACK),
+        let (cabeza, cola, vida, grosor, color_cabeza, color_cola) = match datos {
+            None => (Vec3::zeros(), Vec3::zeros(), 0.0, 1.0, Color::BLACK, Color::BLACK),
             Some((n, edad)) => {
                 let (cab, col, vida) = estela_en(n, edad);
                 // Por COMPAS, no por beat: `n` va de cuatro en cuatro, asi
                 // que dividirlo por los cuatro tiempos hace que dos estelas
                 // seguidas sean siempre dos hadas distintas.
                 let (r, g, b) = PALETA[(n as usize / 4) % PALETA.len()];
-                // El 0.7 es para que se vea el COLOR: a pleno, el bloom
+                // EL TOPE CRECE CON EL TEMA, de 0.70 a 0.95.
+                //
+                // El 0.70 esta para que se vea el COLOR: a pleno, el bloom
                 // lleva la cabeza a blanco y la estela pierde de que hada
-                // era.
+                // era. Pero fijo en 0.70 la estela del segundo 20 y la del
+                // climax pesan lo mismo, y el resto de la escena no: las
+                // luces, el bloom, la camara y la profundidad de campo
+                // crecen todas con `cine`. Una estela que no crece con
+                // ellas se va HACIA ATRAS en el cuadro a medida que el tema
+                // se agranda, que es lo contrario de lo que tiene que
+                // hacer lo que lleva el arpa.
+                let tope = 0.70 + 0.25 * params.cine;
                 let tinte = |k: f32| {
-                    let c = |x: f32| (x * 255.0 * vida * k * 0.7).clamp(0.0, 255.0) as u8;
+                    let c = |x: f32| (x * 255.0 * vida * k * tope).clamp(0.0, 255.0) as u8;
                     Color::new(c(r), c(g), c(b), 255)
                 };
-                (cab, col, vida, tinte(1.0), tinte(0.45))
+                // Y ENGORDAN: la mitad mas de radio sobre el final. Es lo
+                // que se nota de verdad contra un cuadro ya cargado de
+                // bloom, porque el bloom pinta el halo pero la silueta la
+                // decide el radio.
+                let grosor = 1.0 + 0.5 * params.cine;
+                (cab, col, vida, grosor, tinte(1.0), tinte(0.45))
             }
         };
 
         if let Some(h) = hijos.first_mut() {
             if let Some(e) = (h.as_mut() as &mut dyn Any).downcast_mut::<Sphere>() {
                 e.center = cabeza;
-                e.radius = ESTELA_RADIO * vida;
+                e.radius = ESTELA_RADIO * vida * grosor;
                 e.material.emission_color = Some(color_cabeza);
             }
         }
@@ -499,7 +513,7 @@ fn actualizar_estelas(
                 cil.set_visible(vida > 0.0);
                 if vida > 0.0 {
                     cil.recolocar(cola, cabeza);
-                    cil.set_radio(ESTELA_RADIO_COLA * vida);
+                    cil.set_radio(ESTELA_RADIO_COLA * vida * grosor);
                     cil.material_mut().emission_color = Some(color_cola);
                 }
             }
