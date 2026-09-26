@@ -1235,9 +1235,32 @@ const BLOOM_RADIO_CARPA: f32 = 0.0045;
 /// apretado contra el objeto; con 0.75 mandan los chicos y se derrama por
 /// el cuadro. La tabla mueve `bloom_radius` entre 5 (intro) y 14 (coro),
 /// asi que esta escala y este piso lo llevan de 0.42 a 0.73.
-const BLOOM_DISPERSION_BASE: f32 = 0.27;
-const BLOOM_DISPERSION_ESCALA: f32 = 0.033;
-const BLOOM_DISPERSION_MAXIMA: f32 = 0.78;
+/// EL RANGO ES ANGOSTO A PROPOSITO, y esto arregla un defecto que se
+/// reportaba como "la camara se reenfoca a veces".
+///
+/// La dispersion decide cuanto pesan los niveles chicos de la cadena, o
+/// sea CUANTO SE DERRAMA el halo. Antes iba de 0.435 a 0.732 siguiendo al
+/// bajo, y medido sobre la cancion podia recorrer el 75% de ese rango en
+/// tres segundos. Se rendearon los dos extremos con todo lo demas igual y
+/// la diferencia es inconfundible: con la dispersion baja la Triforce
+/// tiene un halo apretado y el cuadro se lee nitido, y con la alta el
+/// resplandor se reparte por todas partes y el cuadro entero parece
+/// desenfocado. Eso, yendo y viniendo cada pocos segundos, es exactamente
+/// lo que el ojo interpreta como un foco que se corrige solo.
+///
+/// (Antes de llegar aca se descartaron dos sospechosos midiendo: el peso
+/// del acumulador temporal, que a dieciocho cuadros por segundo solo va de
+/// 0.253 a 0.298 y no alcanza para nada; y la profundidad de campo, que
+/// con la banda nitida en 0.20 deja TODA la fuente en desenfoque cero en
+/// todo momento.)
+///
+/// Con 0.44 a 0.58 el halo sigue respirando con el bajo pero su ANCHO
+/// queda casi quieto. La separacion es la que corresponde: la intensidad
+/// del bloom lleva la musica, y el ancho lleva el look. El ancho, si se
+/// mueve mucho, no se lee como musica: se lee como un defecto de camara.
+const BLOOM_DISPERSION_BASE: f32 = 0.362;
+const BLOOM_DISPERSION_ESCALA: f32 = 0.0156;
+const BLOOM_DISPERSION_MAXIMA: f32 = 0.60;
 
 /// Entre que profundidades se abre el caleidoscopio, en la escala del canal
 /// alpha (0 = pegado a la camara, 1 = `PROFUNDIDAD_MAXIMA`).
@@ -2379,7 +2402,7 @@ fn llama(t: f32, semilla: u32) -> f32 {
 fn avanzar_noche(cielo: &mut Cielo, lights: &mut [Light], p: &SceneParams) {
     // `Cielo` solo sabe de resplandor del horizonte, y cuanto resplandor
     // hay es exactamente cuanta luz de dia hay.
-    cielo.ajustar(p.giro_cielo, p.luz_del_dia, p.tiempo);
+    cielo.ajustar(p.giro_cielo, p.luz_del_dia, p.tiempo, &p.ataques);
 
     if let Some(luna) = lights.get_mut(LUZ_LUNA) {
         luna.position = cielo.luna() * 40.0;

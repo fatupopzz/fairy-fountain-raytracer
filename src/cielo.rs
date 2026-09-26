@@ -21,7 +21,7 @@
 //! donde bajan los god rays.
 
 use crate::texture::TextureImage;
-use crate::vec3::{normalize, Vec3};
+use crate::vec3::{cross, dot, normalize, Vec3};
 use raylib::prelude::Color;
 use std::f32::consts::PI;
 
@@ -53,6 +53,26 @@ const TITILEO_VELOCIDAD: f32 = 0.9;
 /// que en un cuadro de 45 grados de campo seria un punto).
 const LUNA_RADIO: f32 = 0.045;
 
+/// Uno de cada cuantos ataques del arpa lanza una estrella. Ver `ajustar`.
+const ESTRELLA_CADA: usize = 6;
+
+/// Cuanto dura una estrella fugaz, en segundos.
+const ESTRELLA_VIDA: f32 = 1.9;
+
+/// Largo de la estela, en radianes de arco recorrido.
+const ESTRELLA_ESTELA: f32 = 0.30;
+
+/// Cuanto arco recorre la cabeza en toda su vida, en radianes.
+///
+/// Medio radiano son unos treinta grados, algo mas de la mitad del ancho
+/// del cuadro: la estrella lo cruza sin salirse por el costado a mitad de
+/// camino.
+const ESTRELLA_CARRERA: f32 = 0.52;
+
+/// El grosor de la estela, en radianes. Es lo que la hace una RAYA y no
+/// un trazo grueso: cero coma cero dos radianes es poco mas de un grado.
+const ESTRELLA_GROSOR: f32 = 0.018;
+
 pub struct Cielo {
     imagen: TextureImage,
     /// Cuanto giro el cielo alrededor del eje vertical, en radianes. La
@@ -66,6 +86,23 @@ pub struct Cielo {
     /// resplandor rosa y oro que sube desde el horizonte y apaga las
     /// estrellas mas bajas.
     amanecer: f32,
+    /// LAS ESTRELLAS FUGACES VIVAS en este cuadro, como (indice del ataque
+    /// del arpa que la lanzo, cuantos segundos hace que la lanzo).
+    ///
+    /// No guardan trayectoria porque no hace falta: TODO lo que describe a
+    /// una estrella sale de su indice, pasado por un hash. Por donde
+    /// entra, hacia donde va, cuanto corre y cuanto dura son funcion del
+    /// numero del ataque, y donde esta AHORA es funcion de su edad.
+    ///
+    /// Eso es a proposito y es el mismo criterio que rige todo lo que se
+    /// mueve con la cancion en esta escena: el estado de la escena es una
+    /// FUNCION DEL SEGUNDO en el que estamos, no un acumulador del bucle
+    /// de dibujado. Este trazador entrega entre quince y veintidos cuadros
+    /// por segundo segun lo que haya en pantalla; con estrellas que se
+    /// movieran "un poco en cada cuadro", las mismas notas darian
+    /// trayectorias distintas segun lo cargada que estuviera la escena, y
+    /// ademas irian mas lentas justamente en los momentos mas intensos.
+    estrellas: Vec<(u32, f32)>,
 }
 
 impl Cielo {
@@ -175,16 +212,41 @@ impl Cielo {
             giro: 0.0,
             tiempo: 0.0,
             amanecer: 0.0,
+            estrellas: Vec::new(),
         }
     }
 
     /// Deja el cielo en el estado de este cuadro: girado `giro` radianes y
     /// con `amanecer` de resplandor en el horizonte. Se llama una vez por
     /// cuadro, antes de trazar.
-    pub fn ajustar(&mut self, giro: f32, amanecer: f32, tiempo: f32) {
+    pub fn ajustar(&mut self, giro: f32, amanecer: f32, tiempo: f32, ataques: &[(usize, f32)]) {
         self.giro = giro;
         self.amanecer = amanecer.clamp(0.0, 1.0);
         self.tiempo = tiempo;
+
+        // QUE ATAQUES DEL ARPA SE CONVIERTEN EN ESTRELLA.
+        //
+        // Uno de cada `ESTRELLA_CADA`, no todos. El tema tiene 351 ataques
+        // en tres minutos y en sus tramos mas densos pasan de tres por
+        // segundo: con una estrella por ataque el cielo seria una lluvia
+        // de meteoros constante, y una estrella fugaz que pasa todo el
+        // tiempo deja de ser una estrella fugaz. Tomando uno de cada seis
+        // caen unas seis por minuto, que es raro y esperable a la vez, que
+        // es lo que hace que uno las mire.
+        //
+        // El filtro va sobre el INDICE del ataque y no sobre un reloj, asi
+        // que sigue siendo funcion pura de la cancion: el mismo tema da
+        // siempre las mismas estrellas en los mismos instantes.
+        self.estrellas.clear();
+        for &(numero, t_ataque) in ataques {
+            if numero % ESTRELLA_CADA != 0 {
+                continue;
+            }
+            let edad = tiempo - t_ataque;
+            if (0.0..ESTRELLA_VIDA).contains(&edad) {
+                self.estrellas.push((numero as u32, edad));
+            }
+        }
     }
 
     /// Si la direccion apunta a la luna o a su halo.
@@ -197,6 +259,134 @@ impl Cielo {
     /// Hacia donde esta la luna AHORA, con el giro del cielo aplicado.
     pub fn luna(&self) -> Vec3 {
         girar_y(&normalize(&LUNA_DIRECCION), self.giro)
+    }
+
+    /// LO QUE APORTA UNA ESTRELLA FUGAZ en la direccion `d`, de 0 a 1.
+    ///
+    /// La estrella recorre un ARCO DE CIRCULO MAXIMO, que es como cruza el
+    /// cielo cualquier cosa que va derecho: se elige un punto de entrada
+    /// `a` y una direccion de marcha `b` perpendicular a el, y la cabeza en
+    /// cada momento es `a*cos(t) + b*sin(t)`. Los dos vectores salen del
+    /// hash del numero del ataque, asi que cada nota del arpa entra por su
+    /// propio lugar del cielo y siempre por el mismo.
+    ///
+    /// Para saber si `d` cae sobre la estela no hace falta recorrerla:
+    /// alcanza con pasar `d` al sistema del arco. Su componente fuera del
+    /// plano (contra `a x b`) dice a que distancia esta de la linea, y el
+    /// angulo dentro del plano dice a que altura del recorrido. Son tres
+    /// productos punto: la estela entera se resuelve sin iterar.
+    fn estrella_fugaz(&self, d: &Vec3, numero: u32, edad: f32) -> f32 {
+        // El punto de entrada y la direccion de marcha, del hash.
+        let h1 = hash2(numero, 7717);
+        let h2 = hash2(numero, 3391);
+        let h3 = hash2(numero, 9173);
+
+        // ENTRAN POR DONDE SE VE EL CIELO, que en esta escena es una
+        // franja y no media esfera.
+        //
+        // La fuente esta adentro de una cueva con techo: casi todo el
+        // cielo esta tapado, y lo que se ve es la banda que asoma por
+        // encima del muro del fondo, hacia -Z, que es justo hacia donde
+        // mira la camara. La luna esta puesta ahi (azimut 4.4, elevacion
+        // 0.19) por la misma razon.
+        //
+        // Con el azimut al azar sobre toda la vuelta, cinco de cada seis
+        // estrellas caian detras de una pared y no las veia nadie: el
+        // arpa lanzaba y no pasaba nada. Sesgandolas a la ventana visible
+        // se ven casi todas.
+        // LA VENTANA SALE DE LA GEOMETRIA DE LA CAMARA, no del gusto.
+        //
+        // El ojo esta a unas once unidades del centro y mira al punto
+        // (0, 2, 0) desde una altura de 4.7, o sea catorce grados y medio
+        // HACIA ABAJO, con medio campo vertical de 22.5. El cuadro cubre
+        // entonces de -37 a +8 grados de elevacion. Por abajo, el muro del
+        // fondo (que llega a y = 3.2 a doce unidades) tapa todo lo que
+        // este por debajo de unos -4. Asi que el cielo se ve en una franja
+        // de unos doce grados alrededor del horizonte, y nada mas.
+        //
+        // La primera version puso las estrellas entre +10 y +42 grados,
+        // que suena razonable para un cielo y esta ENTERO por encima del
+        // borde de arriba del cuadro: se lanzaban, el test confirmaba que
+        // encendian su arco, y no se veia ni una.
+        //
+        // Y ENCIMA HAY QUE DESCONTAR EL LETTERBOX. Sobre el final del
+        // tema las bandas negras del formato ancho se comen un 11% de la
+        // altura arriba y abajo, o sea otros cuatro grados y medio de
+        // elevacion por arriba. El techo visible baja de +8 a +3.7.
+        //
+        // Con la franja util entre -3.8 (el borde del muro) y +3.7 (la
+        // banda negra), lo que queda son siete grados pegados al
+        // horizonte. La segunda version puso las estrellas entre +0.6 y
+        // +7.5 grados y la mitad de arriba caia adentro de la banda
+        // negra: se lanzaban, estaban en el cuadro, y el letterbox las
+        // tapaba. Se encontro imprimiendo la elevacion de la cabeza y
+        // comparandola contra lo que el encuadre deja ver.
+        //
+        // En horizontal el cuadro cubre el eje de la camara (azimut 4.71,
+        // o sea -Z) mas menos 29 grados.
+        const AZIMUT_CAMARA: f32 = 4.71;
+        const ABANICO: f32 = 0.50;
+        let azimut = AZIMUT_CAMARA + (h1 - 0.5) * 2.0 * ABANICO;
+        let elevacion = -0.02 + h2 * 0.075;
+        let a = direccion(azimut, elevacion);
+
+        // Una direccion de marcha perpendicular a `a`. Se arma con el
+        // producto cruz contra un eje auxiliar y se gira un angulo al azar
+        // dentro del plano, asi que no todas caen igual.
+        let aux = if a.y.abs() < 0.9 {
+            Vec3::new(0.0, 1.0, 0.0)
+        } else {
+            Vec3::new(1.0, 0.0, 0.0)
+        };
+        // `u` es la tangente HORIZONTAL (sale del producto cruz contra el
+        // eje vertical) y `v` la que sube. La marcha se arma sobre todo
+        // con la horizontal y un poco de la vertical: una estrella que
+        // sube o baja a plomo se sale de la franja visible en medio
+        // segundo, y una que cruza en diagonal la recorre entera. Que sea
+        // en diagonal es ademas como se ven: casi nunca caen a plomo.
+        let u = normalize(&cross(&a, &aux));
+        let v = cross(&a, &u);
+        let lado = if h3 < 0.5 { 1.0 } else { -1.0 };
+        let caida = -(0.15 + h3.fract() * 0.45);
+        let b = normalize(&(u * lado + v * caida));
+
+        // Donde esta la cabeza AHORA, en radianes de arco.
+        let fraccion = edad / ESTRELLA_VIDA;
+        let cabeza = fraccion * ESTRELLA_CARRERA;
+
+        // `d` en el sistema del arco.
+        let n = cross(&a, &b);
+        let fuera = dot(d, &n).abs();
+        if fuera > ESTRELLA_GROSOR * 3.0 {
+            return 0.0;
+        }
+        let ang = dot(d, &b).atan2(dot(d, &a));
+
+        // Detras de la cabeza y no mas de `ESTRELLA_ESTELA`: ahi esta la
+        // estela. `atras` va de 0 en la cabeza a 1 en la cola.
+        let atras = (cabeza - ang) / ESTRELLA_ESTELA;
+        if !(0.0..1.0).contains(&atras) {
+            return 0.0;
+        }
+
+        // El perfil a lo ancho: gaussiano, y mas FINO hacia la cola. Una
+        // estela real se abre un poco al alejarse de la cabeza, pero se
+        // apaga mucho mas rapido de lo que se abre, asi que en cuadro lo
+        // que se ve es una punta que se afila.
+        let ancho = ESTRELLA_GROSOR * (1.0 - atras * 0.55);
+        let perfil = (-(fuera / ancho) * (fuera / ancho)).exp();
+
+        // A lo largo: brillante en la cabeza y apagandose hacia la cola.
+        let cola = (1.0 - atras).powi(3);
+
+        // Y la vida entera entra y sale con una curva en S, para que no
+        // aparezca ni desaparezca de golpe.
+        let vida = {
+            let x = (1.0 - (fraccion * 2.0 - 1.0).abs()).clamp(0.0, 1.0);
+            x * x * (3.0 - 2.0 * x)
+        };
+
+        perfil * cola * vida
     }
 
     /// El color del cielo en la direccion `d` (normalizada).
@@ -236,8 +426,31 @@ impl Cielo {
             noche = Color::new(canal(noche.r), canal(noche.g), canal(noche.b), 255);
         }
 
+        // LAS ESTRELLAS FUGACES, sumadas encima de todo.
+        //
+        // Se apagan con la luz del dia: una estrella fugaz a plena luz no
+        // se ve, y ademas seria una raya blanca sobre un cielo rosa, que
+        // se leeria como un defecto y no como una estrella. Con el cielo
+        // encendido del alba desaparecen solas.
+        let mut fugaz = 0.0f32;
+        if self.amanecer < 0.95 && !self.estrellas.is_empty() {
+            for &(numero, edad) in &self.estrellas {
+                fugaz += self.estrella_fugaz(&d, numero, edad);
+            }
+            fugaz *= 1.0 - self.amanecer;
+        }
+        let con_fugaz = |c: Color| {
+            if fugaz <= 0.0 {
+                return c;
+            }
+            // Blanco apenas azulado y SUMADO: es luz.
+            let f = fugaz.min(1.5);
+            let mezcla = |base: u8, k: f32| (base as f32 + 255.0 * f * k).min(255.0) as u8;
+            Color::new(mezcla(c.r, 0.92), mezcla(c.g, 0.96), mezcla(c.b, 1.0), 255)
+        };
+
         if self.amanecer <= 0.0 {
-            return noche;
+            return con_fugaz(noche);
         }
 
         // El amanecer, en DOS CAPAS, y hacen falta las dos.
@@ -293,7 +506,7 @@ impl Cielo {
         g = canal(g, 110.0, 75.0) as f32;
         b = canal(b, 150.0, 20.0) as f32;
 
-        Color::new(r as u8, g as u8, b as u8, 255)
+        con_fugaz(Color::new(r as u8, g as u8, b as u8, 255))
     }
 }
 
@@ -390,11 +603,11 @@ mod tests {
         let mut cielo = Cielo::generar();
         let horizonte = direccion(1.0, 0.03);
         let noche = cielo.color(&horizonte);
-        cielo.ajustar(0.0, 1.0, 0.0);
+        cielo.ajustar(0.0, 1.0, 0.0, &[]);
         let alba = cielo.color(&horizonte);
         assert!(alba.r > noche.r + 60 && alba.r > alba.b);
 
-        cielo.ajustar(0.6, 0.0, 0.0);
+        cielo.ajustar(0.6, 0.0, 0.0, &[]);
         let luna = cielo.luna();
         assert!((luna - normalize(&LUNA_DIRECCION)).magnitude() > 0.3);
         // Mirando a donde esta la luna ahora, se la ve.
@@ -427,7 +640,7 @@ mod tests {
         let mut min = i32::MAX;
         let mut max = i32::MIN;
         for paso in 0..24 {
-            cielo.ajustar(0.0, 0.0, paso as f32 * 0.3);
+            cielo.ajustar(0.0, 0.0, paso as f32 * 0.3, &[]);
             let b = brillo(&cielo, &estrella);
             min = min.min(b);
             max = max.max(b);
@@ -436,10 +649,69 @@ mod tests {
 
         // La luna se queda quieta.
         let luna = normalize(&LUNA_DIRECCION);
-        cielo.ajustar(0.0, 0.0, 0.0);
+        cielo.ajustar(0.0, 0.0, 0.0, &[]);
         let a = brillo(&cielo, &luna);
-        cielo.ajustar(0.0, 0.0, 1.8);
+        cielo.ajustar(0.0, 0.0, 1.8, &[]);
         assert_eq!(a, brillo(&cielo, &luna));
+    }
+
+    /// La estrella fugaz tiene que ENCENDER el cielo a lo largo de su
+    /// arco y no tocarlo fuera de el. Se verifica sin depender de la
+    /// escena: se arma una estrella a mano, se busca el punto mas
+    /// brillante del cielo y se comprueba que supera con holgura al cielo
+    /// sin ella.
+    #[test]
+    fn la_estrella_fugaz_enciende_su_arco() {
+        let mut cielo = Cielo::generar();
+
+        // Se compara DIRECCION POR DIRECCION, no el maximo del cielo. El
+        // maximo no sirve: la luna ya vale blanco puro, asi que con
+        // estrella o sin ella el maximo es el mismo 765 y el test no
+        // mediria nada. (Se escribio asi primero y paso exactamente eso.)
+        let malla: Vec<Vec3> = (0..240)
+            .flat_map(|a| {
+                (0..60).map(move |e| {
+                    direccion(a as f32 / 240.0 * std::f32::consts::TAU, e as f32 / 60.0 * 1.5)
+                })
+            })
+            .collect();
+        let brillo = |c: Color| c.r as i32 + c.g as i32 + c.b as i32;
+
+        cielo.ajustar(0.0, 0.0, 0.0, &[]);
+        let sin: Vec<i32> = malla.iter().map(|d| brillo(cielo.color(d))).collect();
+
+        // Con una estrella a la mitad de su vida, que es cuando mas
+        // brilla. El ataque numero 0 pasa el filtro de `ESTRELLA_CADA`.
+        let t = ESTRELLA_VIDA * 0.5;
+        cielo.ajustar(0.0, 0.0, t, &[(0, 0.0)]);
+        assert_eq!(cielo.estrellas.len(), 1, "no se armo la estrella");
+        let con: Vec<i32> = malla.iter().map(|d| brillo(cielo.color(d))).collect();
+
+        let subida = con.iter().zip(&sin).map(|(c, s)| c - s).max().unwrap();
+        assert!(
+            subida > 200,
+            "la estrella no enciende nada: la mayor subida fue de {subida} sobre 765"
+        );
+
+        // Y tiene que ser una RAYA: pocas direcciones tocadas. Si tocara
+        // muchas seria un velo sobre el cielo, no una estrella.
+        let tocadas = con.iter().zip(&sin).filter(|(c, s)| *c - *s > 30).count();
+        assert!(
+            (1..malla.len() / 30).contains(&tocadas),
+            "toca {tocadas} de {} direcciones: tiene que ser una raya fina",
+            malla.len()
+        );
+    }
+
+    /// Fuera de su vida no existe, y de dia tampoco.
+    #[test]
+    fn la_estrella_fugaz_no_existe_fuera_de_su_vida() {
+        let mut cielo = Cielo::generar();
+        cielo.ajustar(0.0, 0.0, ESTRELLA_VIDA + 0.5, &[(0, 0.0)]);
+        assert!(cielo.estrellas.is_empty(), "sigue viva pasada su vida");
+
+        cielo.ajustar(0.0, 0.0, -1.0, &[(0, 0.0)]);
+        assert!(cielo.estrellas.is_empty(), "existe antes de lanzarse");
     }
 
     #[test]
