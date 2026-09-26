@@ -3224,7 +3224,7 @@ fn main() {
     escena.registrar_anillos(objects.len());
     objects.push(Box::new(GrupoAcotado::con_margen(
         anillos,
-        animacion::ANILLO_RADIO + animacion::ANILLO_GROSOR,
+        animacion::ANILLO_ALCANCE,
     )));
 
     // --- 5b. LOS CRISTALES ---

@@ -549,9 +549,28 @@ pub const ANILLOS: usize = 3;
 /// rodeada.
 pub const ANILLO_RADIO: f32 = 1.38;
 
-/// El grosor del tubo. Fino: un anillo grueso tapa, y lo que tiene que
-/// hacer es dibujar una linea de luz en el aire.
+/// El grosor del tubo EN REPOSO. Fino: un anillo grueso tapa, y lo que
+/// tiene que hacer es dibujar una linea de luz en el aire. Con el ataque
+/// del arpa engorda (ver `actualizar_anillos`).
 pub const ANILLO_GROSOR: f32 = 0.055;
+
+/// Cuanto dura el destello de un anillo cuando le toca su ataque del arpa,
+/// en segundos.
+///
+/// Corto. Un anillo que tarda en apagarse deja de leerse como un GOLPE y
+/// pasa a ser una luz que sube y baja; y como los tres se reparten los
+/// ataques, uno largo haria que casi siempre estuvieran los tres
+/// encendidos, que es lo mismo que ninguno.
+const ANILLO_DESTELLO: f32 = 0.45;
+
+/// Hasta donde puede llegar un anillo desde el centro de la Trifuerza.
+///
+/// Es el margen con el que hay que armar su grupo, y tiene que contemplar
+/// LOS DOS movimientos: que el anillo gira (asi que barre la esfera de su
+/// radio) y que con el golpe se agranda y engorda. Si la caja de nacimiento
+/// se quedara corta, el arbol recortaria justo en el golpe, que es cuando
+/// se lo mira.
+pub const ANILLO_ALCANCE: f32 = ANILLO_RADIO * 1.12 + ANILLO_GROSOR * 3.0;
 
 /// A que altura viven, que es la del medio de la Trifuerza.
 pub const ANILLO_Y: f32 = 1.95;
@@ -605,7 +624,47 @@ fn actualizar_anillos(
             // apenas visibles y sobre el final son de las cosas que mas
             // brillan, igual que el resto de la escena.
             let (r, g, b) = PALETA[k];
-            let fuerza = (0.22 + params.armonia[k] * 0.60 + params.pulso * 0.25)
+            // CADA ANILLO SE QUEDA CON UN ATAQUE DE CADA TRES.
+            //
+            // Antes los tres colgaban de `armonia` y de `pulso`, que son
+            // dos cosas lentas y COMUNES a los tres: los tres subian y
+            // bajaban juntos, y tres cosas que hacen lo mismo a la vez se
+            // leen como una sola. Repartiendo los ataques del arpa de a
+            // uno, el arpa RECORRE los anillos, que es lo mismo que hace el
+            // arpegio con las hadas y lo que convierte tres aros en una
+            // figura que toca.
+            //
+            // Es el mismo reparto por numero de ataque que usan las hadas,
+            // asi que sigue siendo funcion pura del segundo en el que
+            // estamos: el ataque 17 es siempre del mismo anillo.
+            let destello = params
+                .ataques
+                .iter()
+                .filter(|(n, _)| n % ANILLOS == k)
+                .filter_map(|&(_, t)| {
+                    let edad = params.tiempo - t;
+                    (0.0..ANILLO_DESTELLO)
+                        .contains(&edad)
+                        .then(|| 1.0 - edad / ANILLO_DESTELLO)
+                })
+                .fold(0.0f32, f32::max);
+            // Al cuadrado: pega y se va, en vez de bajar parejo.
+            let destello = destello * destello;
+
+            // LO QUE MAS SE VE NO ES EL BRILLO SINO LA SILUETA, que es la
+            // leccion que dejaron las estelas del arpa. Con el golpe el
+            // tubo ENGORDA hasta el doble y el anillo se ABRE un poco, como
+            // una onda que sale de la Trifuerza; el brillo se monta encima.
+            // Y por debajo de los dos, el anillo respira con la energia del
+            // tema, que es el movimiento lento que los mantiene vivos
+            // mientras el arpa calla.
+            anillo.radio_menor = ANILLO_GROSOR
+                * (1.0 + destello * 1.10 + params.pulso * 0.35);
+            anillo.radio_mayor = ANILLO_RADIO
+                * (1.0 + destello * 0.055 + params.energia_suave * 0.035);
+
+            let fuerza = (0.20 + params.armonia[k] * 0.45 + destello * 0.85
+                + params.pulso * 0.15)
                 * (0.40 + 0.60 * params.cine);
             let canal = |x: f32| (x * 255.0 * fuerza).clamp(0.0, 255.0) as u8;
             anillo.material_mut().emission_color =
