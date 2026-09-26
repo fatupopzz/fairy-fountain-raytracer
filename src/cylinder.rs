@@ -274,6 +274,34 @@ impl CilindroOrientado {
         }
     }
 
+    /// Lo vuelve a poner entre dos puntos nuevos.
+    ///
+    /// Recalcula el largo y los tres ejes igual que `nuevo`, para poder
+    /// moverlo en cada cuadro. Lo usan las estelas del arpa, que cruzan la
+    /// escena: hacerlas con un cilindro que se recoloca en vez de con una
+    /// fila de esferas las deja LISAS (una fila de esferas se lee como una
+    /// oruga, por mas que se solapen: cada una tiene su silueta) y ademas
+    /// sale mas barato, una primitiva en vez de diez.
+    pub fn recolocar(&mut self, desde: Vec3, hasta: Vec3) {
+        let delta = hasta - desde;
+        let largo = delta.magnitude().max(1e-4);
+        self.eje = delta / largo;
+        let referencia = if self.eje.y.abs() > 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        self.u = normalize(&cross(&referencia, &self.eje));
+        self.w = cross(&self.eje, &self.u);
+        self.base = desde;
+        self.local.height = largo;
+    }
+
+    /// El radio, para afinar o engrosar el haz sin rehacerlo.
+    pub fn set_radio(&mut self, radio: f32) {
+        self.local.radius = radio;
+    }
+
     /// El material, para poder tocarlo despues de armada la escena: los
     /// keyframes le suben y bajan la emision al haz en cada cuadro.
     pub fn material_mut(&mut self) -> &mut Material {

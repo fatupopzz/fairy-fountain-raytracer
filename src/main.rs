@@ -2173,6 +2173,10 @@ impl Orbita {
     /// la vertical, donde la camara se da vuelta.
     const PHI_MIN: f32 = 0.1;
     const PHI_MAX: f32 = 1.2;
+    /// La distancia con la que arranca la camara.
+    ///
+    /// 10.7 y no 11.0: ver el comentario de `inicial`.
+    const RADIO_INICIAL: f32 = 10.7;
     const RADIO_MIN: f32 = 5.0;
     const RADIO_MAX: f32 = 12.0;
     /// La camara RESPIRA: el radio oscila +/- 1.2 cada 41 segundos, un
@@ -2182,22 +2186,18 @@ impl Orbita {
     const RADIO_PERIODO: f32 = 41.0;
     /// Cuanto se acerca la camara entre el principio y el final del tema.
     const CINE_ACERCAMIENTO: f32 = 1.5;
-    /// Cuanto se adelanta la camara en el golpe.
-    ///
-    /// SUBIDO de 0.10 a 0.24. El comentario viejo decia, con razon, que
-    /// diez centimetros sobre once metros no los ve nadie como movimiento;
-    /// lo que no decia es que entonces tampoco aportaban el "se siente
-    /// sincronizado" que se le atribuia. Veinticuatro centimetros son un
-    /// 2% del radio: sigue siendo imperceptible como desplazamiento, pero
-    /// el borde del cuadro se mueve lo justo para que el golpe se sienta en
-    /// el cuerpo.
-    ///
-    /// No mas que esto, y el limite lo pone la duracion y no el gusto: el
-    /// pulso dura 120 ms y la escena corre entre 15 y 20 cuadros por
-    /// segundo, o sea que el empujon entero entra en dos cuadros. Un
-    /// desplazamiento grande en dos cuadros no se lee como un golpe de
-    /// camara sino como un salto de imagen.
-    const PULSO_EMPUJE: f32 = 0.24;
+    // LA CAMARA YA NO SE EMPUJA CON EL GOLPE.
+    //
+    // Habia un `PULSO_EMPUJE` que la adelantaba unos centimetros en cada
+    // tiempo fuerte, con la idea de que el golpe se sintiera en el cuerpo.
+    // Se saco: el tema es una nana, la escena es un lugar en calma, y una
+    // camara que da un tironcito cada medio segundo no acompana ese clima
+    // sino que pone al que mira en tension. Lo que tiene que latir es la
+    // LUZ, no el punto de vista.
+    //
+    // El pulso sigue moviendo el bloom, las luces de la fuente, las hadas
+    // y los haces de luz. Eso se siente y no inquieta, porque son cosas
+    // que estan pasando adentro de la cueva y no sacudidas del encuadre.
 
     /// De frente, apenas elevada (~14 grados) y a 11 de distancia: el ojo
     /// queda en (0, 4.7, 10.7), bajo el techo, con la fuente en cuadro.
@@ -2206,7 +2206,18 @@ impl Orbita {
             timer: 0.0,
             theta_manual: 0.0,
             phi_manual: 0.0,
-            radio: 11.0,
+            // 10.7 y no 11.0: la respiracion del radio es de +/- 1.2 y el
+            // tope de arriba esta en 12. Arrancando en 11, la suma llegaba
+            // a 12.2 y se topaba, asi que durante un 22% de cada ciclo de
+            // cuarenta y un segundos el dolly se FRENABA EN SECO contra el
+            // limite y despues arrancaba de nuevo. Eso no se lee como una
+            // camara que respira sino como una que se traba: es la otra
+            // mitad de lo que se reportaba como composicion abrupta.
+            //
+            // Con 10.7 el recorrido entero (9.5 a 11.9) cabe adentro del
+            // rango y la respiracion nunca toca el tope. El encuadre queda
+            // un 3% mas cerca, que no se nota.
+            radio: Self::RADIO_INICIAL,
         }
     }
 
@@ -2276,14 +2287,9 @@ impl Orbita {
     /// `radio` para que no se acumule con las teclas: es un corrimiento
     /// del encuadre, no algo que el usuario este pidiendo.
     ///
-    /// `pulso` la empuja un pelin hacia adelante en cada golpe. Son diez
-    /// centimetros sobre once metros: nadie lo ve como un movimiento, pero
-    /// es lo que hace que la escena se SIENTA sincronizada en vez de
-    /// parecer un video con musica de fondo.
-    fn camara_cine(&self, mira_y: f32, cine: f32, pulso: f32) -> Camera {
+    fn camara_cine(&self, mira_y: f32, cine: f32) -> Camera {
         let (theta, phi) = (self.theta(), self.phi());
-        let radio = (self.distancia() - Self::CINE_ACERCAMIENTO * cine
-            - Self::PULSO_EMPUJE * pulso)
+        let radio = (self.distancia() - Self::CINE_ACERCAMIENTO * cine)
             .clamp(Self::RADIO_MIN, Self::RADIO_MAX);
         let ojo = Vec3::new(
             CAMARA_MIRA.x + radio * phi.cos() * theta.sin(),
@@ -3326,6 +3332,68 @@ fn main() {
         objects.push(Box::new(GrupoAcotado::con_margen(orbes, animacion::HADA_ALCANCE)));
     }
 
+    // --- 6b. LAS ESTELAS DEL ARPA ---
+    //
+    // Cada pocos ataques del arpa, una luz cruza la fuente pasando entre
+    // las columnas. Es la idea de la estrella fugaz, pero traida ADENTRO
+    // de la cueva: se probo primero en el cielo y no se veia, porque con
+    // la camara mirando catorce grados hacia abajo y el letterbox
+    // comiendose el borde de arriba, el cielo visible es una franja de
+    // siete grados pegada al horizonte y encima tapada a trozos por las
+    // losas del techo. Aca cruzan por donde la camara esta mirando.
+    //
+    // Cada estela son ocho esferitas emisivas en fila, la cabeza mas
+    // grande y las de atras apagandose. Van TODAS en un grupo, con margen
+    // de sobra: cruzan la escena entera y la caja acotante se calcula una
+    // sola vez (ver `GrupoAcotado::con_margen`).
+    let estela_mat = Material::new(
+        [1.0, 0.0, 0.0, 0.0],
+        1.0,
+        0.0,
+        Texture::Solid(color_f(1.0, 0.95, 1.0)),
+        // Nace apagada: la animacion le escribe el brillo cuando le toca.
+        Some(Color::new(0, 0, 0, 255)),
+    );
+    // UN GRUPO POR ESTELA, y no uno solo con las treinta esferas. La caja
+    // de cada uno se RECALCULA en cada cuadro alrededor de donde quedo esa
+    // estela (ver `GrupoAcotado::recalcular_caja`): con una sola caja fija
+    // que cubriera los tres recorridos, cualquier rayo que entrara a la
+    // fuente probaba las treinta esferas aunque no hubiera ninguna
+    // encendida, y eso costaba siete milisegundos por cuadro.
+    for _ in 0..animacion::ESTELAS {
+        // La cabeza (esfera) y la cola (cilindro orientado). Nacen
+        // invisibles; la animacion las enciende cuando les toca.
+        let segmentos: Vec<Box<dyn RayIntersect + Send + Sync>> = vec![
+            Box::new(Sphere {
+                center: Vec3::new(0.0, 2.5, 0.0),
+                radius: 0.0,
+                material: estela_mat.clone(),
+            }),
+            Box::new(cylinder::CilindroOrientado::nuevo(
+                Vec3::new(0.0, 2.5, 0.0),
+                Vec3::new(0.0, 2.5, 0.1),
+                0.0,
+                0.0,
+                estela_mat.clone(),
+            )),
+        ];
+        escena.registrar_estela(objects.len());
+        // CON MARGEN GRANDE, aunque despues la caja se recalcule cada
+        // cuadro. El BVH se construye UNA vez y se queda con su propia
+        // copia de la caja de cada objeto, asi que la que vale para podar
+        // el arbol es la de este momento: si naciera chica (las esferas
+        // arrancan con radio cero), el arbol descartaria la estela para
+        // siempre y no se veria nunca por mas que despues se moviera.
+        //
+        // El recalculo de cada cuadro NO reemplaza a esto: afina la prueba
+        // que el grupo se hace A SI MISMO cuando el rayo ya llego hasta
+        // el, que es la que evita probar las diez esferas.
+        objects.push(Box::new(GrupoAcotado::con_margen(
+            segmentos,
+            animacion::ESTELA_ALCANCE,
+        )));
+    }
+
     // --- 7. POLVO DE HADA ---
     // Sesenta esferas DIMINUTAS esparcidas por el volumen de la
     // fuente: particulas de polvo magico en el aire. Mas debiles que las
@@ -3670,7 +3738,7 @@ fn main() {
             let params = analisis.get_scene_params(t);
             animacion::actualizar_escena(&mut objects, &mut lights, &escena, &params);
             avanzar_noche(&mut cielo, &mut lights, &params);
-            cam = orbita.camara_cine(params.camera_target_y, params.cine, params.pulso);
+            cam = orbita.camara_cine(params.camera_target_y, params.cine);
 
             let jitter = (halton(n + 1, 2), halton(n + 1, 3));
             // La referencia de mas abajo se traza fuera de este bucle y
@@ -3736,7 +3804,7 @@ fn main() {
             // El pendulo en el mismo instante de la cancion.
             let mut cam_orbita = Orbita::inicial();
             cam_orbita.avanzar(t, 0.0, 0.0, 0.0);
-            let cam = cam_orbita.camara_cine(params.camera_target_y, params.cine, params.pulso);
+            let cam = cam_orbita.camara_cine(params.camera_target_y, params.cine);
             animacion::actualizar_escena(&mut objects, &mut lights, &escena, &params);
             avanzar_noche(&mut cielo, &mut lights, &params);
 
@@ -3984,7 +4052,7 @@ fn main() {
         orbita.avanzar(if foto.is_some() { 0.0 } else { dt }, d_theta, d_phi, d_radio);
         // Siempre apuntando al centro de la cueva, a la ALTURA que pide la
         // seccion de la cancion.
-        let camera = orbita.camara_cine(params.camera_target_y, params.cine, params.pulso);
+        let camera = orbita.camara_cine(params.camera_target_y, params.cine);
 
         // ---------- LA ESCENA SE MUEVE ----------
         // Antes de trazar, no despues: el cuadro que se dibuja abajo tiene
@@ -4245,10 +4313,14 @@ mod tests {
     fn la_orbita_inicial_esta_de_frente() {
         let cam = Orbita::inicial().camara(2.0);
 
-        // radio * sin(phi) y radio * cos(phi) sobre el punto de mira.
+        // radio * sin(phi) y radio * cos(phi) sobre el punto de mira. Se
+        // calculan de las constantes y no se escriben a mano: este test se
+        // rompio una vez porque tenia el radio viejo clavado.
+        let r = Orbita::RADIO_INICIAL;
+        let ph = Orbita::PHI_BASE;
         assert!((cam.position.x).abs() < 1e-4);
-        assert!((cam.position.y - 4.72).abs() < 0.05);
-        assert!((cam.position.z - 10.66).abs() < 0.05);
+        assert!((cam.position.y - (CAMARA_MIRA.y + r * ph.sin())).abs() < 0.05);
+        assert!((cam.position.z - r * ph.cos()).abs() < 0.05);
 
         // Mira hacia -Z y un poco hacia abajo.
         let f = cam.get_forward();
@@ -4329,7 +4401,7 @@ mod tests {
 
             let d = (cam.position - CAMARA_MIRA).magnitude();
             assert!((d - o.distancia()).abs() < 1e-3);
-            assert!((d - 11.0).abs() <= Orbita::RADIO_AMPLITUD + 1e-3);
+            assert!((d - Orbita::RADIO_INICIAL).abs() <= Orbita::RADIO_AMPLITUD + 1e-3);
 
             let hacia_centro = normalize(&(CAMARA_MIRA - cam.position));
             assert!(dot(&hacia_centro, &cam.get_forward()) > 0.999);

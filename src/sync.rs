@@ -675,6 +675,33 @@ impl SyncData {
             .unwrap_or(TipoSeccion::Verso)
     }
 
+    /// LA ALTURA A LA QUE MIRA LA CAMARA, interpolada entre secciones.
+    ///
+    /// `TipoSeccion::mira_y` devuelve un valor por seccion: 2.8 en la
+    /// intro y la coda, 2.2 en los versos, 2.0 en el resto. Eso iba
+    /// DIRECTO a la camara, y el salto entre dos secciones es de hasta 0.8
+    /// unidades: a los once metros a los que orbita el ojo, eso son mas de
+    /// cuatro grados de cabeceo EN UN CUADRO, diez veces a lo largo del
+    /// tema. Se reportaba como que la escena "se compone abruptamente", y
+    /// es exactamente eso: un corte de camara sin corte.
+    ///
+    /// Con tres segundos de transicion en curva en S, el mismo movimiento
+    /// se convierte en un cabeceo lento que acompana el cambio de seccion
+    /// en vez de anunciarlo.
+    fn mira_y_suave(&self, t: f32) -> f32 {
+        const TRANSICION: f32 = 3.0;
+        let Some(i) = self.secciones.iter().rposition(|s| s.t <= t) else {
+            return TipoSeccion::Verso.mira_y();
+        };
+        let actual = self.secciones[i].tipo.mira_y();
+        if i == 0 {
+            return actual;
+        }
+        let anterior = self.secciones[i - 1].tipo.mira_y();
+        let x = ((t - self.secciones[i].t) / TRANSICION).clamp(0.0, 1.0);
+        anterior + (actual - anterior) * (x * x * (3.0 - 2.0 * x))
+    }
+
     /// El latigazo de la bateria: 1.0 en el golpe, cayendo despues.
     ///
     /// El guion lo describe como "multiplicar por 0.85 en cada cuadro". Aca
@@ -1210,7 +1237,7 @@ impl SyncData {
             tiempo: t,
             ataques: self.ataques_hasta(t, ATAQUES_VENTANA),
             laser_emissions,
-            camera_target_y: seccion.mira_y(),
+            camera_target_y: self.mira_y_suave(t),
             color_shift: seccion.tinte(),
 
             // Los sectores del caleidoscopio cuelgan del bass, igual que el

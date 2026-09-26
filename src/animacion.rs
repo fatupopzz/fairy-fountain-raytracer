@@ -15,6 +15,7 @@
 //! leyera el anterior, un multiplicador de 0.9 sostenido apagaria la escena
 //! hasta dejarla negra en un minuto.
 
+use crate::cylinder::CilindroOrientado;
 use crate::grupo_acotado::GrupoAcotado;
 use crate::light::Light;
 use crate::plane::Plane;
@@ -38,6 +39,14 @@ pub struct EscenaViva {
     /// que haberse armado con `GrupoAcotado::con_margen(.., HADA_ALCANCE)`,
     /// porque las hadas se MUEVEN y la esfera acotante no se recalcula.
     orbes: Vec<(usize, Vec<(Vec3, f32, Color)>)>,
+    /// EL GRUPO DE LAS ESTELAS: las que cruzan la fuente con el arpa.
+    ///
+    /// Un solo grupo con `ESTELAS * ESTELA_SEGMENTOS` esferas adentro,
+    /// repartidas de a bloques: los primeros `ESTELA_SEGMENTOS` hijos son
+    /// la primera estela, los siguientes la segunda, y asi. Se arma con
+    /// margen, como las hadas, porque cruzan la escena entera y la caja
+    /// no se recalcula.
+    estelas: Vec<usize>,
     /// La intensidad con la que se construyo cada luz puntual.
     luces_base: Vec<f32>,
     /// Donde esta el agua: `(indice del grupo, indice del hijo)`. Es un
@@ -75,6 +84,7 @@ impl EscenaViva {
     pub fn nueva() -> Self {
         EscenaViva {
             orbes: Vec::new(),
+            estelas: Vec::new(),
             luces_base: Vec::new(),
             agua: None,
             agua_emision: None,
@@ -128,6 +138,11 @@ impl EscenaViva {
     }
 
     /// Se llama UNA vez, con las luces ya construidas.
+    /// Anota el grupo de UNA estela del arpa. Se llama una vez por ranura.
+    pub fn registrar_estela(&mut self, grupo: usize) {
+        self.estelas.push(grupo);
+    }
+
     pub fn registrar_luces(&mut self, luces: &[Light]) {
         self.luces_base = luces.iter().map(|l| l.intensity).collect();
     }
@@ -319,12 +334,177 @@ fn hada_en(base: Vec3, k: usize, total: usize, tiempo: f32, ataques: &[(usize, f
 /// `params` YA viene con las capas aplicadas (`sync::get_scene_params` se
 /// encarga): estructura por secciones, pulsos del ritmo y destellos. Aca
 /// solo se escriben los numeros sobre la escena.
+/// CUANTAS ESTELAS PUEDEN CRUZAR A LA VEZ.
+///
+/// Tres. Con un ataque del arpa de cada `ESTELA_CADA` y una vida de
+/// `ESTELA_VIDA`, medido sobre la cancion nunca hay mas de dos vivas al
+/// mismo tiempo; la tercera es el margen para que, si alguna vez hubiera
+/// tres, no desaparezca una de golpe.
+pub const ESTELAS: usize = 3;
+
+
+/// Uno de cada cuantos ataques del arpa lanza una estela.
+pub const ESTELA_CADA: usize = 5;
+
+/// Cuanto dura el cruce, en segundos.
+pub const ESTELA_VIDA: f32 = 1.5;
+
+/// Cuanto mide el recorrido, en unidades del mundo. La fuente mide seis de
+/// lado y la plaza doce: catorce la cruza entera y sobra para entrar y
+/// salir fuera de cuadro.
+pub const ESTELA_LARGO: f32 = 14.0;
+
+/// De que esta hecha cada estela: UNA CABEZA Y UNA COLA.
+///
+/// La cabeza es una esfera y la cola un cilindro orientado que va de la
+/// cabeza hacia atras. Dos primitivas, no mas.
+///
+/// Se probo primero con una fila de diez esferitas solapadas y no
+/// funciona: por mas que se solapen, cada esfera tiene su silueta y su
+/// sombreado, asi que la estela se lee como una ORUGA con festones. Un
+/// cilindro no tiene costuras porque es una sola superficie, y de paso
+/// cuesta una decima parte.
+/// El radio de la cabeza.
+const ESTELA_RADIO: f32 = 0.10;
+
+/// El radio de la cola, mas fino que la cabeza: asi la estela tiene punta.
+const ESTELA_RADIO_COLA: f32 = 0.055;
+
+/// Cuanto mide la cola, en unidades del mundo.
+const ESTELA_COLA: f32 = 1.6;
+
+/// Hasta donde puede llegar una estela desde el centro de la escena: es el
+/// margen con el que hay que armar su grupo acotado.
+pub const ESTELA_ALCANCE: f32 = ESTELA_LARGO * 0.5 + 1.0;
+
+/// LA ESTELA NUMERO `n` EN EL INSTANTE `edad`.
+///
+/// Devuelve, para cada segmento, donde esta y cuanto brilla. Todo sale del
+/// numero del ataque pasado por un hash, igual que las estrellas fugaces
+/// del cielo y por la misma razon: asi la escena sigue siendo funcion del
+/// segundo en el que estamos y no de cuantos cuadros se hayan dibujado.
+///
+/// EL RECORRIDO CRUZA ENTRE LAS COLUMNAS. Entra por un punto de un circulo
+/// de radio siete —fuera del anillo de columnas, que esta en 3.5— y sale
+/// por el otro lado, pasando a una distancia del centro que tambien sale
+/// del hash: algunas rozan la Triforce y otras pasan de largo por un
+/// costado. La altura va entre el borde de la piscina y el techo, que es
+/// la banda por donde se ve el hueco entre columna y columna.
+fn estela_en(n: u32, edad: f32) -> (Vec3, Vec3, f32) {
+    let h = |k: u32| {
+        let mut x = n.wrapping_mul(0x9e37_79b9) ^ k.wrapping_mul(0x85eb_ca6b);
+        x ^= x >> 15;
+        x = x.wrapping_mul(0x2545_f491);
+        x ^= x >> 13;
+        (x & 0xFFFF) as f32 / 65535.0
+    };
+
+    let fraccion = (edad / ESTELA_VIDA).clamp(0.0, 1.0);
+
+    let angulo = h(1) * std::f32::consts::TAU;
+    let (sa, ca) = angulo.sin_cos();
+    // Cuanto se aparta del centro: algunas rozan la Triforce y otras pasan
+    // de largo por un costado.
+    let impacto = (h(2) - 0.5) * 4.0;
+    let altura = 1.3 + h(3) * 2.6;
+    let caida = (h(4) - 0.5) * 1.2;
+
+    let entrada = Vec3::new(ca * 7.0 - sa * impacto, altura, sa * 7.0 + ca * impacto);
+    let marcha = Vec3::new(-ca, caida / ESTELA_LARGO, -sa);
+
+    let avance = fraccion * ESTELA_LARGO;
+    let cabeza = entrada + marcha * avance;
+    // La cola no puede salirse por detras del punto de entrada, o al
+    // principio se veria asomar de la nada.
+    let cola = entrada + marcha * (avance - ESTELA_COLA).max(0.0);
+
+    // Entra y sale con una curva en S: ni aparece ni desaparece de golpe.
+    let x = (1.0 - (fraccion * 2.0 - 1.0).abs()).clamp(0.0, 1.0);
+    (cabeza, cola, x * x * (3.0 - 2.0 * x))
+}
+
+/// Escribe las estelas del arpa sobre sus esferas.
+fn actualizar_estelas(
+    objetos: &mut [Box<dyn RayIntersect + Send + Sync>],
+    escena: &EscenaViva,
+    params: &SceneParams,
+) {
+    // Cuales estan vivas AHORA. Se filtran del listado de ataques del
+    // analisis, que llega entero en los parametros, asi que esto es
+    // funcion pura del segundo en el que estamos.
+    let mut vivas: Vec<(u32, f32)> = params
+        .ataques
+        .iter()
+        .filter(|(n, _)| n % ESTELA_CADA == 0)
+        .filter_map(|&(n, t)| {
+            let edad = params.tiempo - t;
+            (0.0..ESTELA_VIDA).contains(&edad).then_some((n as u32, edad))
+        })
+        .collect();
+    // Si hubiera mas que ranuras, se quedan las mas recientes.
+    vivas.sort_by(|a, b| a.1.total_cmp(&b.1));
+    vivas.truncate(ESTELAS);
+
+    // Los tres colores de las hadas: la estela es una de ellas cruzando.
+    const PALETA: [(f32, f32, f32); 3] =
+        [(1.0, 0.55, 0.85), (0.45, 0.85, 1.0), (1.0, 0.85, 0.45)];
+
+    for (ranura, &indice) in escena.estelas.iter().enumerate() {
+        let Some(objeto) = objetos.get_mut(indice) else {
+            continue;
+        };
+        let Some(grupo) = (objeto.as_mut() as &mut dyn Any).downcast_mut::<GrupoAcotado>() else {
+            continue;
+        };
+        let datos = vivas.get(ranura).copied();
+        let hijos = grupo.children_mut();
+
+        let (cabeza, cola, vida, color_cabeza, color_cola) = match datos {
+            None => (Vec3::zeros(), Vec3::zeros(), 0.0, Color::BLACK, Color::BLACK),
+            Some((n, edad)) => {
+                let (cab, col, vida) = estela_en(n, edad);
+                let (r, g, b) = PALETA[(n as usize / ESTELA_CADA) % PALETA.len()];
+                // El 0.7 es para que se vea el COLOR: a pleno, el bloom
+                // lleva la cabeza a blanco y la estela pierde de que hada
+                // era.
+                let tinte = |k: f32| {
+                    let c = |x: f32| (x * 255.0 * vida * k * 0.7).clamp(0.0, 255.0) as u8;
+                    Color::new(c(r), c(g), c(b), 255)
+                };
+                (cab, col, vida, tinte(1.0), tinte(0.45))
+            }
+        };
+
+        if let Some(h) = hijos.first_mut() {
+            if let Some(e) = (h.as_mut() as &mut dyn Any).downcast_mut::<Sphere>() {
+                e.center = cabeza;
+                e.radius = ESTELA_RADIO * vida;
+                e.material.emission_color = Some(color_cabeza);
+            }
+        }
+        if let Some(h) = hijos.get_mut(1) {
+            if let Some(cil) = (h.as_mut() as &mut dyn Any).downcast_mut::<CilindroOrientado>() {
+                cil.set_visible(vida > 0.0);
+                if vida > 0.0 {
+                    cil.recolocar(cola, cabeza);
+                    cil.set_radio(ESTELA_RADIO_COLA * vida);
+                    cil.material_mut().emission_color = Some(color_cola);
+                }
+            }
+        }
+
+        grupo.recalcular_caja(0.02);
+    }
+}
+
 pub fn actualizar_escena(
     objetos: &mut [Box<dyn RayIntersect + Send + Sync>],
     luces: &mut [Light],
     escena: &EscenaViva,
     params: &SceneParams,
 ) {
+    actualizar_estelas(objetos, escena, params);
+
     // Las hadas: caen despacio, se deshacen con el arpa y renacen, y
     // brillan con la cancion. La presencia entra en el radio Y en la
     // emision: con el radio en cero al deshacerse, no queda ni una bolita

@@ -52,6 +52,27 @@ impl GrupoAcotado {
         }
     }
 
+    /// Vuelve a calcular la caja a partir de donde estan los hijos AHORA,
+    /// con un margen.
+    ///
+    /// Es para los grupos cuyos hijos se mueven MUCHO y ademas se apagan:
+    /// las estelas del arpa cruzan la escena entera, asi que la caja fija
+    /// que las cubriria a todas es casi la escena entera, y entonces
+    /// cualquier rayo que entra a la fuente termina probando las treinta
+    /// esferas de las tres estelas aunque ninguna este encendida. Medido,
+    /// eso costaba siete milisegundos por cuadro.
+    ///
+    /// Recalculandola cada cuadro, la caja queda pegada a la estela: la
+    /// estela que esta cruzando se prueba solo si el rayo pasa cerca, y las
+    /// ranuras apagadas (radio cero) quedan con una caja de tamano cero que
+    /// no toca ningun rayo.
+    pub fn recalcular_caja(&mut self, margen: f32) {
+        let (min, max) = Self::caja(&self.children);
+        let m = Vec3::new(margen, margen, margen);
+        self.min = min - m;
+        self.max = max + m;
+    }
+
     /// Caja que contiene a todos los hijos.
     ///
     /// Si algun hijo no se puede acotar (un plano infinito), el grupo se
