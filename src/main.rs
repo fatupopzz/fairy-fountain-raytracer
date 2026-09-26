@@ -261,6 +261,31 @@ const AUDIO_PATHS: [&str; 3] = [
 /// que si importan: piso -> cristal -> anillo, que es la toma.
 const MIN_CONTRIBUCION: f32 = 0.03;
 
+/// CUANTAS LUCES RECUERDA EL CACHE DE SOMBRA. Ver `Sombras`.
+///
+/// La escena tiene cinco luces con multiplicador mas las de ambiente; con
+/// dieciseis ranuras sobra, y si algun dia hubiera mas, las de mas alla de
+/// la ranura ultima simplemente no usan cache y andan igual.
+const LUCES_CACHE: usize = 16;
+
+/// EL CACHE DE SOMBRA: quien tapo la ultima vez.
+///
+/// Una ranura por luz. `usize::MAX` es
+/// "nadie". Vive por FILA de pixeles, que es la unidad en la que se reparte
+/// el trazado entre nucleos, asi que es de un solo hilo por construccion y
+/// no hace falta ningun candado.
+#[derive(Clone)]
+struct Sombras {
+    /// Quien tapo esta luz en el pixel anterior.
+    luces: [usize; LUCES_CACHE],
+}
+
+impl Sombras {
+    fn vacio() -> Sombras {
+        Sombras { luces: [usize::MAX; LUCES_CACHE] }
+    }
+}
+
 /// Aporte minimo de una luz para que valga la pena tirarle el rayo de
 /// sombra. En una escala de 0 a 1 por canal, 0.004 es un nivel de 255:
 /// por debajo de eso la luz es literalmente invisible.
@@ -572,6 +597,8 @@ fn cast_ray(
     // De ella salen el desvio del reflejo y el punto de la luz al que
     // apunta el rayo de sombra. Ver `azar.rs`.
     semilla: u32,
+    // Quien tapo la luz la ultima vez, por luz. Ver `Sombras`.
+    sombras: &mut Sombras,
 ) -> (Color, f32) {
     // Corte de la recursion: sin esto dos espejos enfrentados
     // se llaman para siempre. El limite es un parametro porque
@@ -655,6 +682,13 @@ fn cast_ray(
             };
 
             let largo = AO_RADIO * azar::uniforme(s ^ 0x5eed_1234);
+
+            // SE PROBO EL CACHE DE LAS SOMBRAS TAMBIEN ACA Y SALE PEOR:
+            // 39.7, 38.1 y 39.8 ms contra 37.4, 37.7 y 38.1. El truco vive
+            // de la coherencia, y estos rayos no la tienen: van a
+            // direcciones sorteadas del hemisferio, asi que el que tapo al
+            // anterior casi nunca tapa al siguiente y lo unico que queda es
+            // un test de geometria regalado por rayo, dos por impacto.
             let mut tapado = false;
             arbol_sombras.recorrer(&origen_ao, &dir, largo, |i, limite| {
                 if objects[i].occluded(&origen_ao, &dir, limite) {
@@ -723,7 +757,7 @@ fn cast_ray(
         );
     }
 
-    for light in lights {
+    for (numero_luz, light) in lights.iter().enumerate() {
         // CORTE TEMPRANO POR APORTE.
         //
         // Con la atenuacion por distancia, una luz lejana no cambia ni un
@@ -810,20 +844,63 @@ fn cast_ray(
         // el fondo de la piscina se ilumina a traves del agua y los
         // cristales proyectan sombras tenues. Se corta apenas alguien
         // tapa del todo.
+        // EL CACHE DE SOMBRA: primero se le pregunta al que tapo la vez
+        // anterior, antes de tocar el arbol.
+        //
+        // Un rayo de sombra bloqueado es barato (corta apenas encuentra al
+        // primero que tapa) pero uno que ademas tiene que ENCONTRARLO paga
+        // el recorrido hasta dar con el. Y las sombras son coherentes: dos
+        // pixeles vecinos, para la misma luz, casi siempre los tapa el
+        // mismo objeto, porque una sombra es una mancha y no un pixel
+        // suelto. Guardando cual fue y probandolo primero, adentro de una
+        // sombra el rayo se resuelve con UN test de geometria en vez de un
+        // recorrido.
+        //
+        // No cambia ni un pixel, y por una razon precisa: si el que se
+        // recuerda tapa del todo, el resultado ES cero pase lo que pase con
+        // el resto del camino (las transmisiones se multiplican y ninguna
+        // es negativa). Solo se puede cortar con el que tapa DEL TODO; si
+        // apenas atenua, hay que recorrer igual, porque para la sombra
+        // importa todo lo que haya en el camino.
+        //
+        // Es el truco de Haines y Greenberg de 1986, que sigue siendo la
+        // mejor relacion entre lo que cuesta escribirlo y lo que ahorra.
         let mut shadow_factor = 1.0f32;
-        arbol_sombras.recorrer(&shadow_origin, &light_dir, shadow_distance, |i, limite| {
-            shadow_factor *= objects[i].transmision(&shadow_origin, &light_dir, shadow_distance);
-            // El limite NO se acorta mientras algo de luz siga pasando:
-            // para la sombra importa TODO lo que haya en el camino, no lo
-            // mas cercano (dos vidrios atenuan dos veces). Pero en cuanto
-            // algo tapa del todo, devolver cero corta el recorrido: la luz
-            // ya no llega y lo que haya mas alla da igual.
-            if shadow_factor <= 0.0 {
-                0.0
-            } else {
-                limite
+        let recordado = sombras.luces.get(numero_luz).copied().unwrap_or(usize::MAX);
+        let resuelto = recordado != usize::MAX
+            && objects[recordado].transmision(&shadow_origin, &light_dir, shadow_distance) <= 0.0;
+
+        if !resuelto {
+            arbol_sombras.recorrer(&shadow_origin, &light_dir, shadow_distance, |i, limite| {
+                shadow_factor *= objects[i].transmision(&shadow_origin, &light_dir, shadow_distance);
+                // El limite NO se acorta mientras algo de luz siga pasando:
+                // para la sombra importa TODO lo que haya en el camino, no
+                // lo mas cercano (dos vidrios atenuan dos veces). Pero en
+                // cuanto algo tapa del todo, devolver cero corta el
+                // recorrido: la luz ya no llega y lo que haya mas alla da
+                // igual.
+                if shadow_factor <= 0.0 {
+                    // Y ESE es el que hay que recordar para el pixel
+                    // siguiente.
+                    if let Some(r) = sombras.luces.get_mut(numero_luz) {
+                        *r = i;
+                    }
+                    0.0
+                } else {
+                    limite
+                }
+            });
+            // Si no lo tapo nadie, se olvida al anterior: seguir
+            // preguntando por un objeto que ya no esta en el camino es un
+            // test de geometria regalado en cada pixel iluminado.
+            if shadow_factor > 0.0 {
+                if let Some(r) = sombras.luces.get_mut(numero_luz) {
+                    *r = usize::MAX;
+                }
             }
-        });
+        } else {
+            shadow_factor = 0.0;
+        }
 
         // En sombra se apagan difuso y especular de ESTA luz, pero NO se
         // corta la funcion: las otras luces siguen aportando, y reflexion
@@ -918,6 +995,7 @@ fn cast_ray(
             // reflejo de un reflejo se desviaria en la misma direccion y
             // el ruido saldria correlacionado entre niveles.
             azar::revolver(semilla ^ 0x9e37_79b9),
+            sombras,
         );
         reflection = scale_color(reflection_color, peso_kr);
     }
@@ -952,6 +1030,7 @@ fn cast_ray(
             ambiente,
             fase_agua,
             azar::revolver(semilla ^ 0x1234_5679),
+            sombras,
         );
         refraction = scale_color(refraction_color, peso_kt);
     }
@@ -1059,6 +1138,33 @@ fn render(
     }
 }
 
+/// LOS DOS ARBOLES. Se arman UNA vez y valen toda la corrida.
+///
+/// SE PROBO REARMARLOS EN CADA CUADRO Y NO SIRVE. Queda anotado para que no
+/// se reintente a ciegas, porque el argumento para hacerlo es bueno: lo que
+/// se mueve nace con una caja que cubre TODO su recorrido (la de cada grupo
+/// de estelas es una esfera de ocho unidades alrededor del centro de la
+/// escena), el arbol se queda con SU copia, y asi casi cualquier rayo que
+/// entra a la cueva "toca" a las estelas y tiene que bajar a preguntarles
+/// aunque no haya ninguna viva. Rearmar los dos arboles sale casi gratis
+/// —treinta y tres objetos, unas dos mil cuentas de area— y deja las cajas
+/// de AHORA.
+///
+/// Medido: 36.7, 38.9 y 37.1 ms contra 37.4, 37.7 y 38.1 sin rearmar, o sea
+/// exactamente nada. El motivo es que ese trabajo YA estaba hecho en otro
+/// lado: cada `GrupoAcotado` recalcula su propia caja en cada cuadro
+/// (`recalcular_caja`), asi que el rayo que entra a la caja gorda del arbol
+/// choca enseguida con la caja chica del grupo y se va. Lo que se ahorraba
+/// rearmando era un test de caja por grupo, no los hijos.
+fn arboles_de(objects: &[Box<dyn RayIntersect + Send + Sync>], occluders: &[usize]) -> (Bvh, Bvh) {
+    let caja_de = |i: &usize| (*i, objects[*i].aabb());
+    let todos: Vec<usize> = (0..objects.len()).collect();
+    (
+        Bvh::construir(&todos.iter().map(caja_de).collect::<Vec<_>>()),
+        Bvh::construir(&occluders.iter().map(caja_de).collect::<Vec<_>>()),
+    )
+}
+
 fn render_rows(
     framebuffer: &mut Framebuffer,
     objects: &[Box<dyn RayIntersect + Send + Sync>],
@@ -1122,6 +1228,13 @@ fn render_rows(
         .enumerate()
         .for_each(|(banda_y, (fila_color, fila_prof))| {
         let y = row_start + banda_y;
+        // El cache de sombra de ESTA fila. Va aca y no afuera porque cada
+        // fila corre en el nucleo que le toque: asi es de un solo hilo por
+        // construccion, sin candados ni falso compartido. Y una fila es
+        // justo la unidad en la que la coherencia sirve, porque los
+        // pixeles vecinos de una fila caen casi siempre en la misma
+        // sombra. Ver `Sombras`.
+        let mut sombras = Sombras::vacio();
         for x in 0..pixel_width {
 
             // Donde cae cada muestra DENTRO del pixel.
@@ -1190,6 +1303,7 @@ fn render_rows(
                         ambiente,
                         fase_agua,
                         azar::semilla(x, y, cuadro),
+                        &mut sombras,
                     );
 
                 suma.0 += color.r as f32;
@@ -3563,9 +3677,7 @@ fn main() {
     // el emblema) y no tapan a nadie: un arbol solo con los que si tapan
     // es mas chico y ademas descarta mejor, porque sus cajas no tienen que
     // cubrir cosas que igual se iban a ignorar.
-    let caja_de = |i: &usize| (*i, objects[*i].aabb());
-    let arbol = Bvh::construir(&(0..objects.len()).collect::<Vec<_>>().iter().map(caja_de).collect::<Vec<_>>());
-    let arbol_sombras = Bvh::construir(&occluders.iter().map(caja_de).collect::<Vec<_>>());
+    let (arbol, arbol_sombras) = arboles_de(&objects, &occluders);
 
     println!(
         "objetos: {} en total, {} pueden dar sombra",
