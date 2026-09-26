@@ -3687,10 +3687,20 @@ fn main() {
         let mut prendidos = 0.0f64;
         let mut total = 0.0f64;
         let mut t = 0.0f32;
+        // Y de paso, EL RITMO DE LAS ESTELAS. Va en el mismo barrido porque
+        // es la otra cosa que un cuadro no puede contestar: una estela es un
+        // evento, y en una foto o esta cruzando o no esta.
+        let mut salidas: Vec<(usize, f32)> = Vec::new();
+
         while t < analisis.duracion {
             let p = analisis.get_scene_params(t);
             if p.laser_emissions.iter().any(|e| *e > 0.02) {
                 prendidos += 1.0;
+            }
+            for &salida in &p.estelas {
+                if !salidas.contains(&salida) {
+                    salidas.push(salida);
+                }
             }
             total += 1.0;
             t += 1.0 / 60.0;
@@ -3699,6 +3709,28 @@ fn main() {
             "\nhay al menos un haz encendido el {:.1}% del tiempo",
             prendidos / total * 100.0
         );
+
+        salidas.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let huecos: Vec<f32> = salidas.windows(2).map(|w| w[1].1 - w[0].1).collect();
+        let mayor = huecos.iter().copied().fold(0.0f32, f32::max);
+        let medio = huecos.iter().sum::<f32>() / huecos.len().max(1) as f32;
+        println!(
+            "{} estelas, una cada {medio:.1} s de media, hueco mas largo {mayor:.1} s",
+            salidas.len()
+        );
+        // El reparto a lo largo del tema, de veinte en veinte segundos: es
+        // donde se ve si el ritmo tiene arco o es un metronomo.
+        print!("reparto cada 20 s:");
+        let mut desde = 0.0f32;
+        while desde < analisis.duracion {
+            let cuantas = salidas
+                .iter()
+                .filter(|(_, t)| (desde..desde + 20.0).contains(t))
+                .count();
+            print!(" {cuantas}");
+            desde += 20.0;
+        }
+        println!();
         return;
     }
 

@@ -336,15 +336,13 @@ fn hada_en(base: Vec3, k: usize, total: usize, tiempo: f32, ataques: &[(usize, f
 /// solo se escriben los numeros sobre la escena.
 /// CUANTAS ESTELAS PUEDEN CRUZAR A LA VEZ.
 ///
-/// Tres. Con un ataque del arpa de cada `ESTELA_CADA` y una vida de
-/// `ESTELA_VIDA`, medido sobre la cancion nunca hay mas de dos vivas al
-/// mismo tiempo; la tercera es el margen para que, si alguna vez hubiera
-/// tres, no desaparezca una de golpe.
+/// Tres. Saliendo en el tiempo fuerte (ver `SyncData::estelas_hasta`) la mas
+/// seguida son dos estelas por compas y medio, o sea una cada 1.8 segundos
+/// contra una vida de `ESTELA_VIDA`: medido sobre la cancion nunca hay mas
+/// de una cruzando. Las otras dos ranuras son el margen para el dia que la
+/// vida crezca o el criterio se apure, porque quedarse sin ranura no se ve
+/// como una estela menos sino como una que desaparece a mitad de vuelo.
 pub const ESTELAS: usize = 3;
-
-
-/// Uno de cada cuantos ataques del arpa lanza una estela.
-pub const ESTELA_CADA: usize = 5;
 
 /// Cuanto dura el cruce, en segundos.
 pub const ESTELA_VIDA: f32 = 1.5;
@@ -380,9 +378,12 @@ pub const ESTELA_ALCANCE: f32 = ESTELA_LARGO * 0.5 + 1.0;
 /// LA ESTELA NUMERO `n` EN EL INSTANTE `edad`.
 ///
 /// Devuelve, para cada segmento, donde esta y cuanto brilla. Todo sale del
-/// numero del ataque pasado por un hash, igual que las estrellas fugaces
-/// del cielo y por la misma razon: asi la escena sigue siendo funcion del
-/// segundo en el que estamos y no de cuantos cuadros se hayan dibujado.
+/// numero de beat que la lanzo pasado por un hash, igual que las estrellas
+/// fugaces del cielo y por la misma razon: asi la escena sigue siendo
+/// funcion del segundo en el que estamos y no de cuantos cuadros se hayan
+/// dibujado. El `n` es el numero de beat y no el de ataque desde que las
+/// estelas salen en el compas, pero para el hash da igual: lo unico que le
+/// pide es que sea el MISMO numero cada vez que se dibuje esa estela.
 ///
 /// EL RECORRIDO CRUZA ENTRE LAS COLUMNAS. Entra por un punto de un circulo
 /// de radio siete —fuera del anillo de columnas, que esta en 3.5— y sale
@@ -391,12 +392,20 @@ pub const ESTELA_ALCANCE: f32 = ESTELA_LARGO * 0.5 + 1.0;
 /// costado. La altura va entre el borde de la piscina y el techo, que es
 /// la banda por donde se ve el hueco entre columna y columna.
 fn estela_en(n: u32, edad: f32) -> (Vec3, Vec3, f32) {
+    // LOS DIECISEIS BITS DE ARRIBA, no los de abajo. Con `n` yendo de cuatro
+    // en cuatro (son numeros de beat, y las estelas salen en el uno de cada
+    // compas) los bits bajos entran casi sin informacion y esta mezcla no
+    // alcanza a repartirlos: tomando los de abajo, de las 54 estelas del
+    // tema veintitres entraban por el mismo cuadrante y tres por el de
+    // enfrente, o sea que casi todas cruzaban para el mismo lado. Los de
+    // arriba son los que se llevan la multiplicacion entera y quedan doce o
+    // catorce por cuadrante.
     let h = |k: u32| {
         let mut x = n.wrapping_mul(0x9e37_79b9) ^ k.wrapping_mul(0x85eb_ca6b);
         x ^= x >> 15;
         x = x.wrapping_mul(0x2545_f491);
         x ^= x >> 13;
-        (x & 0xFFFF) as f32 / 65535.0
+        ((x >> 16) & 0xFFFF) as f32 / 65535.0
     };
 
     let fraccion = (edad / ESTELA_VIDA).clamp(0.0, 1.0);
@@ -429,13 +438,13 @@ fn actualizar_estelas(
     escena: &EscenaViva,
     params: &SceneParams,
 ) {
-    // Cuales estan vivas AHORA. Se filtran del listado de ataques del
-    // analisis, que llega entero en los parametros, asi que esto es
-    // funcion pura del segundo en el que estamos.
+    // Cuales estan vivas AHORA. Las salidas llegan en los parametros, que ya
+    // eligieron los tiempos fuertes que lanzan una (ver
+    // `SyncData::estelas_hasta`); aca solo se descarta lo que ya cruzo, asi
+    // que esto sigue siendo funcion pura del segundo en el que estamos.
     let mut vivas: Vec<(u32, f32)> = params
-        .ataques
+        .estelas
         .iter()
-        .filter(|(n, _)| n % ESTELA_CADA == 0)
         .filter_map(|&(n, t)| {
             let edad = params.tiempo - t;
             (0.0..ESTELA_VIDA).contains(&edad).then_some((n as u32, edad))
@@ -463,7 +472,10 @@ fn actualizar_estelas(
             None => (Vec3::zeros(), Vec3::zeros(), 0.0, Color::BLACK, Color::BLACK),
             Some((n, edad)) => {
                 let (cab, col, vida) = estela_en(n, edad);
-                let (r, g, b) = PALETA[(n as usize / ESTELA_CADA) % PALETA.len()];
+                // Por COMPAS, no por beat: `n` va de cuatro en cuatro, asi
+                // que dividirlo por los cuatro tiempos hace que dos estelas
+                // seguidas sean siempre dos hadas distintas.
+                let (r, g, b) = PALETA[(n as usize / 4) % PALETA.len()];
                 // El 0.7 es para que se vea el COLOR: a pleno, el bloom
                 // lleva la cabeza a blanco y la estela pierde de que hada
                 // era.

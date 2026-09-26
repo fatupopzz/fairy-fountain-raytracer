@@ -35,6 +35,12 @@ pub const LASERES: usize = 8;
 /// una le toca uno cada ~30 segundos: con un minuto se cubre casi siempre.
 pub const ATAQUES_VENTANA: f32 = 60.0;
 
+/// Cuantos segundos de salidas de estela se le pasan a la escena en cada
+/// cuadro. Con que cubra la vida de una estela alcanza, porque lo unico que
+/// se pregunta la escena es cuales estan cruzando AHORA: con
+/// `ESTELA_VIDA = 1.5` sobra el doble.
+pub const ESTELAS_VENTANA: f32 = 3.0;
+
 /// Donde se busca el analisis, en orden. La primera que exista, gana.
 pub const RUTAS_SYNC: [&str; 3] = [
     "fairy_fountain_sync.json",
@@ -744,6 +750,73 @@ impl SyncData {
         ataques
     }
 
+    /// CUANDO SALE UNA ESTELA DEL ARPA: los tiempos fuertes que lanzan una,
+    /// de los ultimos `ventana` segundos hasta `t`, como `(numero de beat,
+    /// instante)`.
+    ///
+    /// ERA "UNO DE CADA CINCO ATAQUES", y ese filtro es aritmetico, no
+    /// musical: cuenta ataques y no sabe de compas ni de frase, asi que las
+    /// estelas caian donde cayeran. Y los ataques de este tema no estan
+    /// repartidos parejo —entre el segundo 120 y el 140 la musica es un
+    /// swell sostenido y no hay ninguno—, asi que quedaba un hueco de
+    /// TREINTA Y CINCO SEGUNDOS sin una sola estela justo donde la cancion
+    /// mas crece, y despues varias apelotonadas.
+    ///
+    /// Ahora salen SIEMPRE EN EL UNO, el primer tiempo de un compas de
+    /// cuatro. Por dos razones: la grilla de beats es lo unico parejo de
+    /// punta a punta del tema (351 beats contra ataques con agujeros), y el
+    /// tiempo fuerte es el que el ojo agarra solo, que es lo mismo por lo
+    /// que `compas` acentua el uno.
+    ///
+    /// CADA CUANTOS COMPASES lo decide la energia del momento, y es lo que
+    /// separa un ritmo con arco de un metronomo: cada cuatro compases en la
+    /// intro dormida, cada dos en el cuerpo del tema, cada compas en el
+    /// climax. Medido sobre la cancion son 54 estelas, una cada tres
+    /// segundos de media, cuatro en los primeros veinte segundos y once
+    /// entre el 120 y el 140, que es el tramo que antes quedaba vacio.
+    ///
+    /// Sigue siendo funcion PURA de `t`: el numero de beat identifica a la
+    /// estela y de el sale su recorrido por hash (igual que antes salia del
+    /// numero de ataque), y la energia se lee del analisis y no de un
+    /// contador que avance por cuadro.
+    fn estelas_hasta(&self, t: f32, ventana: f32) -> Vec<(usize, f32)> {
+        // De cuatro en cuatro desde el primer beat detectado, que en un tema
+        // con entrada limpia como este es el uno de verdad (ver `compas`).
+        const TIEMPOS: usize = 4;
+
+        let mut salidas = Vec::new();
+
+        for (i, &beat) in self.beats.iter().enumerate().step_by(TIEMPOS) {
+            if beat > t {
+                break;
+            }
+            if beat < t - ventana {
+                continue;
+            }
+            // La energia se mide EN EL BEAT y no en `t`: asi la estela que
+            // ya esta cruzando no cambia de criterio a mitad de vuelo.
+            let cada = Self::estelas_cada(self.energia_suave(beat, 2.5));
+            if (i / TIEMPOS) % cada == 0 {
+                salidas.push((i, beat));
+            }
+        }
+
+        salidas
+    }
+
+    /// Cada cuantos compases sale una estela, segun la energia del momento.
+    ///
+    /// Los cortes estan escalados a ESTE tema, que es suave: la energia
+    /// total promedia 0.175 y solo pasa de 0.5 en el climax. De ahi que los
+    /// escalones esten en 0.08 y 0.22 y no en 0.3 y 0.6.
+    fn estelas_cada(energia: f32) -> usize {
+        match energia {
+            e if e < 0.08 => 4,
+            e if e < 0.22 => 2,
+            _ => 1,
+        }
+    }
+
     fn onset_flash(&self, t: f32) -> f32 {
         if self.frames.is_empty() {
             return 0.0;
@@ -1236,6 +1309,7 @@ impl SyncData {
             cine: self.cine(t),
             tiempo: t,
             ataques: self.ataques_hasta(t, ATAQUES_VENTANA),
+            estelas: self.estelas_hasta(t, ESTELAS_VENTANA),
             laser_emissions,
             camera_target_y: self.mira_y_suave(t),
             color_shift: seccion.tinte(),
@@ -1383,6 +1457,14 @@ pub struct SceneParams {
     /// Los ataques del arpa de los ultimos `ATAQUES_VENTANA` segundos, como
     /// `(numero de ataque, instante)`. Con cada uno se deshace un hada.
     pub ataques: Vec<(usize, f32)>,
+    /// Los tiempos fuertes que lanzan una estela del arpa, de los ultimos
+    /// `ESTELAS_VENTANA` segundos, como `(numero de beat, instante)`. Cual
+    /// se esta viendo cruzar lo resuelve `animacion` con `ESTELA_VIDA`.
+    ///
+    /// Van aparte de `ataques` porque miden cosas distintas: los ataques son
+    /// lo que la cancion HIZO y esto es el COMPAS, que es lo unico parejo de
+    /// punta a punta (ver `SyncData::estelas_hasta`).
+    pub estelas: Vec<(usize, f32)>,
     /// La emision de cada haz, INDIVIDUAL: el chase los enciende de a uno.
     pub laser_emissions: [f32; LASERES],
     /// A que altura mira la camara. Lo pide el loop de render, que ya tenia
@@ -1881,6 +1963,62 @@ mod tests {
         // El cuadro 0 tiene total = 0.05: no llega ni a un haz.
         let apagado = d.get_scene_params(0.0);
         assert!(apagado.laser_emissions.iter().all(|e| *e == 0.0));
+    }
+
+    /// Las estelas salen en el UNO, no donde caiga un ataque.
+    #[test]
+    fn las_estelas_salen_en_el_tiempo_fuerte() {
+        let d = muestra();
+
+        // La muestra tiene tres beats y el uno es el primero: la unica
+        // salida posible es esa, y tiene que llegar con su numero de beat.
+        let salidas = d.estelas_hasta(1.0, 3.0);
+        assert_eq!(salidas, vec![(0, 0.0)], "la estela no salio en el primer beat");
+
+        // Y antes de que suene el primer beat no hay ninguna.
+        assert!(d.estelas_hasta(-1.0, 3.0).is_empty());
+    }
+
+    /// EL HUECO DE TREINTA Y CINCO SEGUNDOS, que es lo que este criterio
+    /// vino a arreglar.
+    ///
+    /// Con "uno de cada cinco ataques" el tema se quedaba sin una sola
+    /// estela entre el segundo 120 y el 140, porque ahi la musica es un
+    /// swell sostenido y el detector de ataques no tiene nada que detectar.
+    /// El compas, en cambio, sigue estando. Si alguien vuelve a atar las
+    /// estelas a los ataques, este test se cae.
+    ///
+    /// Va sobre la cancion de verdad y no sobre la muestra a proposito: lo
+    /// que se esta midiendo es el REPARTO a lo largo del tema, y eso no
+    /// existe en tres cuadros de juguete. Sin el JSON no hay nada que
+    /// medir y el test se da por bueno.
+    #[test]
+    fn las_estelas_no_dejan_huecos() {
+        let d = SyncData::cargar(&RUTAS_SYNC);
+        if !d.hay_analisis() {
+            return;
+        }
+
+        // Con la ventana en toda la duracion, llegan todas de una.
+        let salidas = d.estelas_hasta(d.duracion, d.duracion);
+        assert!(salidas.len() > 40, "salieron muy pocas estelas: {}", salidas.len());
+
+        // Todas en el primer tiempo de un compas, y en un beat de verdad.
+        for &(n, t) in &salidas {
+            assert_eq!(n % 4, 0, "la estela {n} no salio en un tiempo fuerte");
+            assert_eq!(d.beats[n], t, "la estela {n} no salio en su beat");
+        }
+
+        let huecos: Vec<f32> = salidas.windows(2).map(|w| w[1].1 - w[0].1).collect();
+        let mayor = huecos.iter().copied().fold(0.0f32, f32::max);
+        let menor = huecos.iter().copied().fold(f32::MAX, f32::min);
+        assert!(mayor < 10.0, "hay un hueco de {mayor:.1} s sin estelas");
+        // Y que no se pisen: una estela vive segundo y medio.
+        assert!(menor > 1.5, "dos estelas a {menor:.2} s: se solapan");
+
+        // El swell, el tramo que antes quedaba vacio.
+        let en_el_swell = salidas.iter().filter(|(_, t)| (120.0..140.0).contains(t)).count();
+        assert!(en_el_swell >= 5, "el swell quedo con {en_el_swell} estelas");
     }
 
     /// La seccion es la que manda el color, y tiene que cambiar en el borde.
