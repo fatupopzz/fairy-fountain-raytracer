@@ -1228,7 +1228,6 @@ struct PostGpu {
 
     loc_bloom_tex: i32,
     loc_bloom_str: i32,
-    loc_punch: i32,
     loc_fog_density: i32,
     loc_fog_color: i32,
     loc_tint: i32,
@@ -1240,6 +1239,9 @@ struct PostGpu {
     // bloom se ata en cada pasada, como en el composite.
     loc_luz_pantalla: i32,
     loc_gr_bloom: i32,
+    // La exposicion de los rayos ya no es constante: la mueve el golpe de
+    // la cancion en cada cuadro. Ver `GODRAYS_PULSO`.
+    loc_gr_exposure: i32,
 
     // `center` del caleidoscopio tampoco esta aca, por lo mismo: el eje del
     // pliegue no se mueve, se manda una vez en `nuevo`.
@@ -1305,7 +1307,31 @@ const GODRAYS_DECAY: f32 = 0.95;
 // sobre la mitad de arriba del cuadro. Apagandolos del todo, a modo de
 // prueba, el climax se leia de inmediato; con este valor se leen los rayos
 // Y se lee la fuente.
-const GODRAYS_EXPOSURE: f32 = 0.24;
+/// EXPOSICION DE BASE de los rayos, la que tienen entre golpe y golpe.
+///
+/// El valor sube con `GODRAYS_PULSO` en cada tiempo. Ver `god_rays`.
+const GODRAYS_EXPOSURE: f32 = 0.17;
+
+/// CUANTO SE ENCIENDEN LOS HACES EN EL GOLPE.
+///
+/// AQUI ES DONDE VIVE EL PULSO DE LA CANCION, y es un cambio de criterio.
+/// Antes el golpe se aplicaba al cuadro ENTERO desde el composite: una
+/// subida de contraste y saturacion y una caida de exposicion entre
+/// tiempos. Funcionaba —medido, treinta por ciento de luminancia y veinte
+/// de contraste entre estar en el uno y estar entre golpes— pero se sentia
+/// como un visualizador de musica: la pantalla pegaba, no la escena.
+///
+/// Los haces de luz hacen el mismo trabajo y son ATMOSFERA en vez de
+/// efecto. Lo que late no es la imagen sino la luz que baja por el hueco
+/// del techo, que es una cosa que esta pasando ADENTRO de la cueva. El ojo
+/// lee lo mismo (algo se enciende al ritmo) y el cuadro no se sacude.
+///
+/// El rango va de 0.17 a 0.55. Ese 0.55 es mas alto que el 0.5 que en su
+/// momento hubo que bajar por reventar el cuadro, y no es contradiccion:
+/// aquello era un valor SOSTENIDO y esto es un pico de 120 milisegundos.
+/// Lo que como promedio permanente era un velo blanco, como transitorio es
+/// un destello.
+const GODRAYS_PULSO: f32 = 0.38;
 const GODRAYS_SAMPLES: i32 = 60;
 
 impl PostGpu {
@@ -1348,7 +1374,6 @@ impl PostGpu {
 
         let loc_bloom_tex = composite.get_shader_location("bloomTex");
         let loc_bloom_str = composite.get_shader_location("bloomStrength");
-        let loc_punch = composite.get_shader_location("punch");
         let loc_fog_density = composite.get_shader_location("fogDensity");
         let loc_fog_color = composite.get_shader_location("fogColor");
         let loc_tint = composite.get_shader_location("colorTint");
@@ -1389,7 +1414,6 @@ impl PostGpu {
         godrays.set_shader_value(loc_gr_density, GODRAYS_DENSITY);
         godrays.set_shader_value(loc_gr_weight, GODRAYS_WEIGHT);
         godrays.set_shader_value(loc_gr_decay, GODRAYS_DECAY);
-        godrays.set_shader_value(loc_gr_exposure, GODRAYS_EXPOSURE);
         godrays.set_shader_value(loc_gr_samples, GODRAYS_SAMPLES);
 
         // La cadena, cada nivel la mitad del anterior. El `max(1)` es por
@@ -1441,13 +1465,13 @@ impl PostGpu {
             loc_sube_scatter,
             loc_bloom_tex,
             loc_bloom_str,
-            loc_punch,
             loc_fog_density,
             loc_fog_color,
             loc_tint,
             loc_resolution,
             loc_luz_pantalla,
             loc_gr_bloom,
+            loc_gr_exposure,
             loc_kal_segments,
             loc_kal_rotation,
             loc_kal_mix,
@@ -1622,7 +1646,6 @@ impl PostGpu {
             escena,
             loc_bloom_tex,
             loc_bloom_str,
-            loc_punch,
             loc_fog_density,
             loc_fog_color,
             loc_tint,
@@ -1631,7 +1654,6 @@ impl PostGpu {
         } = self;
 
         composite.set_shader_value(*loc_bloom_str, p.bloom_strength);
-        composite.set_shader_value(*loc_punch, p.pulso);
         composite.set_shader_value(*loc_fog_density, p.fog_density);
         composite.set_shader_value(
             *loc_fog_color,
@@ -1698,7 +1720,19 @@ impl PostGpu {
     /// bloom (`a`) como fuente de los rayos, y escribe en `rayos`.
     /// `luz_pantalla` es donde cae la luz cenital en la pantalla, en UV, ya
     /// proyectada con la camara del cuadro.
-    fn god_rays(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, luz_pantalla: [f32; 2]) {
+    fn god_rays(
+        &mut self,
+        rl: &mut RaylibHandle,
+        thread: &RaylibThread,
+        luz_pantalla: [f32; 2],
+        pulso: f32,
+    ) {
+        // Los haces se encienden con el golpe. Ver `GODRAYS_PULSO`.
+        self.godrays.set_shader_value(
+            self.loc_gr_exposure,
+            GODRAYS_EXPOSURE + GODRAYS_PULSO * pulso,
+        );
+
         let PostGpu {
             godrays,
             mips,
@@ -3999,7 +4033,12 @@ fn main() {
         post.componer(&mut rl, &thread, &texture, &params);
         // Los rayos bajan desde la luz cenital: se proyecta con la camara
         // de ESTE cuadro, la misma que acaba de trazar.
-        post.god_rays(&mut rl, &thread, proyectar_a_pantalla(&camera, lights[0].position));
+        post.god_rays(
+            &mut rl,
+            &thread,
+            proyectar_a_pantalla(&camera, lights[0].position),
+            params.pulso,
+        );
         post.caleidoscopio(&mut rl, &thread, &texture, &params);
 
         // ---------- DIBUJADO ----------

@@ -20,26 +20,6 @@ uniform sampler2D bloomTex;
 
 uniform float bloomStrength;
 
-// EL GOLPE DEL MOMENTO, de 0 a 1 (`SceneParams::pulso`).
-//
-// POR QUE EL GOLPE SE APLICA ACA Y NO SUBIENDO LUCES. Se probo primero lo
-// obvio —meterle mas luz y mas bloom a la escena en cada tiempo— y se
-// midio: en el climax, la luminancia media del cuadro subia un 2.2% entre
-// estar justo en el uno y estar entre golpes. Eso es invisible; el umbral
-// de Weber para un cambio de brillo sobre un campo grande anda por el 5 al
-// 8 por ciento.
-//
-// Y no es que la luz no subiera: subia bastante. Lo que pasa es que en el
-// climax la imagen YA esta apoyada contra el techo de la curva de tono, y
-// el trabajo de AgX es justamente comprimir ahi. Cuanto mas fuerte el
-// momento, menos puede leerse un golpe hecho de brillo.
-//
-// Asi que el golpe se hace con lo que la curva NO comprime: el CONTRASTE y
-// la SATURACION, que son relaciones entre tonos y no niveles absolutos.
-// Un cuadro que se abre de contraste en el uno "chasquea" aunque su brillo
-// medio no se mueva, y sigue funcionando igual de bien en el tramo
-// tranquilo, donde ademas si hay lugar para que el brillo suba.
-uniform float punch;
 uniform float fogDensity;
 uniform vec3  fogColor;
 uniform vec3  colorTint;
@@ -313,14 +293,7 @@ void main() {
     // El bloom suma sin techo, asi que un foco puede pasarse de 1 por
     // mucho. Recortar ahi dejaria discos blancos planos; AgX lo sube al
     // blanco sin torcerle el tono por el camino.
-    //
-    // La exposicion RESPIRA con el golpe, y hacia ABAJO: en el uno vale lo
-    // que siempre y entre golpes cae un 9%. Va al reves de lo intuitivo a
-    // proposito, por lo mismo que explica el comentario de `punch`: arriba
-    // de la curva no queda lugar para subir, pero para bajar sobra. El
-    // efecto que se percibe es el mismo —el cuadro pega en el uno— y este
-    // si se ve.
-    color = AgX(color * EXPOSICION * (0.91 + 0.09 * punch));
+    color = AgX(color * EXPOSICION);
 
     // --- Gamma ---
     // La unica vuelta a sRGB de toda la cadena.
@@ -331,26 +304,13 @@ void main() {
     // enteran, las sombras suben al violeta de LIFT.
     color += LIFT * (1.0 - color);
 
-    // --- EL GOLPE: contraste ---
-    //
-    // Pivotea en 0.42 y no en 0.5: el pivote es el tono que NO se mueve, y
-    // en un cuadro oscuro como este el 0.5 cae ya en la zona clara, asi que
-    // pivotear ahi levantaria medio cuadro en vez de abrirlo. Con 0.42, las
-    // sombras se hunden y las luces suben alrededor del tono medio real de
-    // la escena.
-    color = clamp((color - 0.42) * (1.0 + punch * 0.20) + 0.42, 0.0, 1.0);
-
     // --- Split toning ---
     float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
     color *= mix(TONO_SOMBRAS, TONO_LUCES, smoothstep(0.1, 0.8, luma));
 
-    // --- Saturacion, tambien con el golpe ---
-    // El color se satura un poco en cada tiempo. Es el otro eje que la
-    // curva de tono no comprime, y es el que hace que el golpe se sienta
-    // en el COLOR (el rosa de las hadas y el cyan del agua se encienden)
-    // en vez de solo en la luz.
+    // --- Saturacion ---
     luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
-    color = clamp(mix(vec3(luma), color, SATURACION + punch * 0.16), 0.0, 1.0);
+    color = clamp(mix(vec3(luma), color, SATURACION), 0.0, 1.0);
 
     finalColor = vec4(color, 1.0);
 }

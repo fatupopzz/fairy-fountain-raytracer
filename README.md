@@ -177,8 +177,8 @@ Medido en un MacBook Air M3, trazando a 400×300 y estirando a 800×600:
 
 | | |
 |---|---|
-| Trazado, sin ventana ni audio | ~34 ms por cuadro (29 fps) |
-| En vivo, con música y post-procesado | 17–26 fps |
+| Trazado, sin ventana ni audio | ~39 ms por cuadro (26 fps) |
+| En vivo, con música y post-procesado | 15–22 fps |
 
 La palanca grande es la resolución de trazado (`RENDER_W` / `RENDER_H` en
 `src/main.rs`), no el post-procesado: el bloom, la niebla y el resto corren en
