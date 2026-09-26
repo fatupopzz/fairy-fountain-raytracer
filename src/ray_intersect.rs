@@ -14,6 +14,7 @@ static NEGRO: Material = Material {
     texture: Texture::Solid(Color::new(0, 0, 0, 255)),
     emission_color: None,
     relieve: None,
+    rugosidad: 0.0,
 };
 
 /// Todo lo que el sombreado necesita saber de un impacto.

@@ -127,11 +127,60 @@ impl Plane {
         let mut slope_x = radial * dx / distance;
         let mut slope_z = radial * dz / distance;
 
-        // 2. Onda cruzada, mas corta y mas suave, en diagonal.
-        let cross = 0.30 * k * 1.7;
-        let phase = (point.x * k * 1.7 + point.z * k * 1.1 + self.ripple_phase * 0.6).cos();
-        slope_x += cross * phase;
-        slope_z += cross * phase * 0.65;
+        // 2. LA SUMA DE SENOS: cuatro trenes de olas rectos, cruzados.
+        //
+        // Antes esto era UNA sola onda diagonal, y el agua se leia como
+        // plastico marmolado. La razon no era el reflejo (se probo bajarle
+        // la nitidez y casi no cambio) sino que la superficie tenia solo
+        // dos frecuencias, las dos largas: los anillos de arriba miden dos
+        // unidades de cresta a cresta y la onda cruzada una y cuarto, sobre
+        // una piscina de cinco. Con dos escalas nada mas, el cielo
+        // reflejado se corta en manchones grandes y lisos, y un manchon
+        // grande y liso es una lamina, no agua.
+        //
+        // Lo que hace que el agua parezca agua es tener olas de MUCHOS
+        // tamanios a la vez. La receta clasica (la de Effective Water
+        // Simulation de GPU Gems) es sumar varios trenes rectos con
+        // direcciones, largos y velocidades distintos, y es lo que va aca.
+        //
+        // Tres detalles que deciden si se ve bien:
+        //
+        //   - LAS DIRECCIONES NO SON PERPENDICULARES ni multiplos simples
+        //     unas de otras. Con dos trenes a noventa grados la suma es una
+        //     grilla, y una grilla se lee como tela y no como agua.
+        //   - LAS AMPLITUDES ESTAN AFINADAS PARA UNA FUENTE EN CALMA. Con
+        //     las olas cortas al doble de esto la superficie queda picada,
+        //     como un lago con viento, y esta piscina es un estanque
+        //     quieto adentro de una cueva.
+        //   - LA AMPLITUD BAJA MAS RAPIDO QUE LO QUE SUBE LA FRECUENCIA.
+        //     La pendiente de un seno es amplitud por frecuencia, asi que
+        //     con amplitud proporcional a 1/frecuencia todas las olas
+        //     aportarian la misma pendiente y las finas dominarian el
+        //     reflejo; con esta caida la ola larga sigue mandando y las
+        //     cortas solo la rompen.
+        //   - LAS LARGAS VAN MAS RAPIDO. En agua profunda la velocidad de
+        //     una ola va con la raiz de su largo, asi que la velocidad de
+        //     cada tren sale de su propio numero de onda y no de un valor
+        //     suelto. Sin eso los trenes se mueven en bloque y el conjunto
+        //     se lee como una sola textura deslizandose.
+        //
+        // (direccion x, direccion z, numero de onda, amplitud)
+        const ONDAS: [(f32, f32, f32, f32); 4] = [
+            (0.92, 0.39, 1.00, 0.34),
+            (-0.51, 0.86, 1.73, 0.16),
+            (0.31, -0.95, 3.11, 0.062),
+            (-0.87, -0.49, 5.40, 0.028),
+        ];
+        for (dx_o, dz_o, onda, amplitud) in ONDAS {
+            let w = k * onda;
+            // La velocidad va con la raiz del largo, o sea con la inversa
+            // de la raiz del numero de onda.
+            let velocidad = onda.sqrt().recip();
+            let fase = (point.x * dx_o + point.z * dz_o) * w + self.ripple_phase * velocidad;
+            let pendiente = amplitud * w * fase.cos();
+            slope_x += pendiente * dx_o;
+            slope_z += pendiente * dz_o;
+        }
 
         // La normal de una superficie de altura h(x, z) es (-dh/dx, 1, -dh/dz).
         normalize(&Vec3::new(

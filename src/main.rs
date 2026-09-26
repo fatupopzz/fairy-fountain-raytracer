@@ -94,6 +94,7 @@
 
 mod animacion;
 mod audio;
+mod azar;
 mod bvh;
 mod camera;
 mod cielo;
@@ -474,6 +475,10 @@ fn cast_ray(
     // sienta amanecer: lo que separa el dia de la noche no son las luces
     // puntuales sino cuanta luz hay en el AIRE, y eso es exactamente esto.
     ambiente: [f32; 3],
+    // La semilla de azar de ESTE rayo: distinta por pixel y por cuadro.
+    // De ella salen el desvio del reflejo y el punto de la luz al que
+    // apunta el rayo de sombra. Ver `azar.rs`.
+    semilla: u32,
 ) -> (Color, f32) {
     // Corte de la recursion: sin esto dos espejos enfrentados
     // se llaman para siempre. El limite es un parametro porque
@@ -556,7 +561,46 @@ fn cast_ray(
         // El origen se desplaza un poquito sobre la normal para que el
         // rayo no se choque con la superficie de la que sale (shadow acne).
         let shadow_origin = intersect.point + intersect.normal * 1e-3;
+
         let shadow_distance = distancia;
+
+        // SE PROBO HACER LAS SOMBRAS SUAVES Y SE DESCARTO. Queda anotado
+        // para que no se reintente a ciegas.
+        //
+        // La idea era la de siempre: darle un radio a cada luz y apuntar el
+        // rayo de sombra a un punto al azar de esa esfera en cada cuadro,
+        // dejando que el acumulador temporal promediara los aciertos y los
+        // fallos hasta formar la penumbra. No cuesta ni un rayo mas, asi
+        // que parecia gratis.
+        //
+        // No lo es, por dos razones que solo aparecen al medir:
+        //
+        //   - CUESTA UN 19% DEL CUADRO (34.5 a 41.2 ms, minimo de cinco
+        //     corridas). Un rayo de sombra bloqueado corta apenas encuentra
+        //     al primero que tapa; uno que pasa tiene que recorrer el arbol
+        //     entero para poder afirmarlo. Al jitterear, en la penumbra la
+        //     mitad de los rayos dejan de bloquearse y pasan a pagar el
+        //     recorrido completo, y ademas los rayos vecinos dejan de ir en
+        //     direcciones parecidas y el recorrido pierde coherencia.
+        //
+        //   - Y NO SE VE COMO PENUMBRA SINO COMO GRANO. El acumulador pesa
+        //     el cuadro nuevo 0.25, o sea que promedia cuatro muestras
+        //     efectivas, no las catorce del modo foto. Cuatro muestras de
+        //     una visibilidad que solo puede valer 0 o 1 dan cinco niveles
+        //     posibles. Restando las dos imagenes, la diferencia no se
+        //     concentra en bandas en el borde de las sombras —que es lo
+        //     que habria que ver— sino repartida como sal y pimienta por
+        //     todas las superficies iluminadas.
+        //
+        // Para que funcionara harian falta mas muestras por cuadro (caro),
+        // mas historia en el acumulador (arrastre) o un filtro espacial
+        // guiado por profundidad y normal. Ninguna de las tres es barata, y
+        // esta escena casi no tiene bordes de sombra duros que suavizar:
+        // esta iluminada por ocho luces de colores que se superponen, asi
+        // que las sombras ya son tenues y de bajo contraste.
+        //
+        // El muestreo estocastico por cuadro SI se quedo donde si rinde:
+        // en el reflejo borroso de mas abajo, que cuesta un 1.5%.
 
         // Con uno que tape basta, asi que esto NO busca el impacto mas
         // cercano: pregunta objeto por objeto y se va con el primer si.
@@ -638,6 +682,25 @@ fn cast_ray(
     let peso_reflexion = peso * peso_kr;
     if peso_reflexion > MIN_CONTRIBUCION {
         let mut reflection_dir = normalize(&reflect(direction, &normal));
+
+        // REFLEJO BORROSO: la direccion se desvia un punto al azar de una
+        // esfera del tamano de la rugosidad. Es la receta clasica (la
+        // "fuzz" del metal de Ray Tracing in One Weekend) y aproxima un
+        // lobulo especular ancho sin tener que muestrear una distribucion
+        // de microfacetas: para rugosidades chicas, que son las de esta
+        // escena, la diferencia no se ve.
+        //
+        // Un rayo por cuadro y el acumulador temporal hace el promedio, o
+        // sea CERO rayos extra. Lo que si cambia es de donde viene el
+        // ruido: con la camara quieta converge en unos cuatro cuadros, y
+        // con la camara moviendose rapido el acumulador confia menos en la
+        // historia y el reflejo se ve un poco granulado. Es el mismo
+        // compromiso que hace cualquier motor en tiempo real.
+        if intersect.material.rugosidad > 0.0 {
+            let desvio = azar::en_esfera(semilla ^ 0x5bf0_3635) * intersect.material.rugosidad;
+            reflection_dir = normalize(&(reflection_dir + desvio));
+        }
+
         // El relieve puede inclinar la normal tanto que el rayo reflejado
         // apunte hacia ADENTRO de la superficie; se lo vuelve a sacar.
         let hacia_adentro = dot(&reflection_dir, &intersect.normal);
@@ -657,6 +720,10 @@ fn cast_ray(
             max_depth,
             peso_reflexion,
             ambiente,
+            // Cada rebote sortea distinto: con la misma semilla, el
+            // reflejo de un reflejo se desviaria en la misma direccion y
+            // el ruido saldria correlacionado entre niveles.
+            azar::revolver(semilla ^ 0x9e37_79b9),
         );
         reflection = scale_color(reflection_color, peso_kr);
     }
@@ -689,6 +756,7 @@ fn cast_ray(
             max_depth,
             peso_refraccion,
             ambiente,
+            azar::revolver(semilla ^ 0x1234_5679),
         );
         refraction = scale_color(refraction_color, peso_kt);
     }
@@ -761,6 +829,8 @@ fn render(
     jitter: (f32, f32),
     // La luz ambiente de este cuadro. Ver `cast_ray`.
     ambiente: [f32; 3],
+    // El numero de cuadro. Ver `render_rows`.
+    cuadro: u32,
     mut entre_bandas: impl FnMut(),
 ) {
     let alto = framebuffer.height;
@@ -781,6 +851,7 @@ fn render(
             antialias,
             jitter,
             ambiente,
+            cuadro,
             fila,
             hasta,
         );
@@ -807,6 +878,11 @@ fn render_rows(
     jitter: (f32, f32),
     // La luz ambiente de este cuadro. Ver `cast_ray`.
     ambiente: [f32; 3],
+    // El numero de cuadro, que entra en la semilla de azar de cada pixel.
+    // Tiene que CAMBIAR entre cuadros: es lo que hace que el acumulador
+    // temporal promedie muestras distintas y los reflejos borrosos y las
+    // sombras suaves converjan en vez de quedarse en una sola muestra.
+    cuadro: u32,
     row_start: usize,
     row_end: usize,
 ) {
@@ -912,6 +988,7 @@ fn render_rows(
                         max_depth,
                         1.0,
                         ambiente,
+                        azar::semilla(x, y, cuadro),
                     );
 
                 suma.0 += color.r as f32;
@@ -2205,7 +2282,8 @@ fn main() {
         Texture::ImageTexture(cargar("fairy_marble.png"), color_f(0.70, 0.60, 0.65), (0.0, 0.0)),
         None,
     )
-    .con_relieve(relieve_marmol.clone(), 1.0);
+    .con_relieve(relieve_marmol.clone(), 1.0)
+    .con_rugosidad(0.10);
 
     // El marmol de la estela del fondo: el mismo, SIN reflexion.
     //
@@ -2267,7 +2345,12 @@ fn main() {
         Texture::ImageTexture(cargar("fairy_marble.png"), color_f(0.55, 0.50, 0.58), (0.0, 0.0)),
         None,
     )
-    .con_relieve(relieve_marmol.clone(), 1.0);
+    .con_relieve(relieve_marmol.clone(), 1.0)
+    // La losa de la plaza es el peor caso de la escena: es la superficie
+    // grande que refleja la fuente entera, y con reflexion perfecta se leia
+    // como una lamina de vidrio puesta sobre la piedra. Piedra pulida y
+    // humeda refleja, pero su reflejo esta ESTIRADO y desenfocado.
+    .con_rugosidad(0.13);
 
     // --- 3. AGUA ---
     // El corazon visual: en la fuente original el agua ILUMINA todo desde
@@ -2283,7 +2366,11 @@ fn main() {
         // Fresnel y el bloom sumando, la piscina entera se iba a cyan
         // reventado.
         Some(color_f(0.04, 0.11, 0.14)),
-    );
+    )
+    // Poca: el agua quieta es casi un espejo. Lo justo para que el borde
+    // entre el cielo reflejado y el agua deje de ser un recorte con filo
+    // de tijera, que es lo que la hacia parecer una lamina de plastico.
+    .con_rugosidad(0.030);
 
     // --- 4. ORO ---
     // Molduras y Triforce. El de las molduras lleva la textura del mineral;
@@ -2304,7 +2391,11 @@ fn main() {
         Texture::ImageTexture(cargar("gold_triforce.png"), color_f(0.85, 0.7, 0.2), (0.0, 0.0)),
         Some(color_f(0.3, 0.25, 0.06)),
     )
-    .con_relieve(relieve_oro.clone(), 1.0);
+    .con_relieve(relieve_oro.clone(), 1.0)
+    // El oro esta MARTILLADO y cepillado: su textura son abolladuras y
+    // rayas de lima, asi que su reflejo tiene que estar estirado y roto.
+    // Con reflejo perfecto las molduras parecian cromadas.
+    .con_rugosidad(0.13);
     let oro_sagrado = Material::new(
         oro.albedo,
         oro.specular,
@@ -2335,7 +2426,10 @@ fn main() {
         Texture::ImageTexture(cargar("obsidian.png"), color_f(0.06, 0.04, 0.10), (0.0, 0.0)),
         None,
     )
-    .con_relieve(relieve_obsidiana.clone(), 1.0);
+    .con_relieve(relieve_obsidiana.clone(), 1.0)
+    // Vidrio volcanico: de las superficies mas pulidas que hay en la
+    // naturaleza, pero no un espejo. Apenas la justa.
+    .con_rugosidad(0.045);
 
     // --- 6. CRISTAL ---
     // Los cristales que crecen en las esquinas de la plaza. Refractan
@@ -2350,7 +2444,9 @@ fn main() {
         1.5,
         Texture::ImageTexture(cargar("crystal.png"), color_f(0.8, 0.6, 0.95), (0.0, 0.0)),
         None,
-    );
+    )
+    // El cuarzo tiene caras planas y pulidas: casi espejo.
+    .con_rugosidad(0.022);
     // --- 7. RUPIAS ---
     // La gema de Hyrule: refracta como el cristal pero mas densa (1.6,
     // como una esmeralda), con brillo propio del color que le toque. Tres
@@ -3095,8 +3191,10 @@ fn main() {
         //    Eso no es solo estetica, es lo que las hace baratas: con el
         //    corte por aporte de `cast_ray`, un impacto lejos de ellas ni
         //    siquiera les tira el rayo de sombra.
-        Light::new(Vec3::new(-1.9, 0.98, 4.5), color_f(1.0, 0.6, 0.25), 2.4).con_alcance(2.0),
-        Light::new(Vec3::new(1.9, 0.98, 4.5), color_f(1.0, 0.6, 0.25), 2.4).con_alcance(2.0),
+        Light::new(Vec3::new(-1.9, 0.98, 4.5), color_f(1.0, 0.6, 0.25), 2.4)
+            .con_alcance(2.0),
+        Light::new(Vec3::new(1.9, 0.98, 4.5), color_f(1.0, 0.6, 0.25), 2.4)
+            .con_alcance(2.0),
     ];
 
     // Las luces se atenuan con la distancia (ver `Light::atenuacion`), y
@@ -3348,7 +3446,7 @@ fn main() {
             fb.clear();
             render_rows(
                 &mut fb, &objects, &cielo, &arbol, &arbol_sombras, &lights, &cam, MAX_DEPTH,
-                false, jitter, ambiente_ultimo, 0, h,
+                false, jitter, ambiente_ultimo, n, 0, h,
             );
 
             if n + 1 == CUADROS {
@@ -3372,7 +3470,7 @@ fn main() {
         let mut ref_fb = Framebuffer::new(w, h, BACKGROUND);
         render_rows(
             &mut ref_fb, &objects, &cielo, &arbol, &arbol_sombras, &lights, &cam, MAX_DEPTH,
-            true, (0.5, 0.5), ambiente_ultimo, 0, h,
+            true, (0.5, 0.5), ambiente_ultimo, 0, 0, h,
         );
         let _ = image::RgbaImage::from_raw(w as u32, h as u32, ref_fb.to_rgba_opaco())
             .map(|img| img.save(format!("{dir}/taa_referencia.png")));
@@ -3411,7 +3509,7 @@ fn main() {
             let t0 = std::time::Instant::now();
             render_rows(
                 &mut fb, &objects, &cielo, &arbol, &arbol_sombras, &lights, &cam, MAX_DEPTH,
-                false, (0.5, 0.5), ambiente_de(params.luz_del_dia), 0, h,
+                false, (0.5, 0.5), ambiente_de(params.luz_del_dia), 0, 0, h,
             );
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
 
@@ -3425,7 +3523,7 @@ fn main() {
             let t1 = std::time::Instant::now();
             render(
                 &mut fb, &objects, &cielo, &arbol, &arbol_sombras, &lights, &cam, MAX_DEPTH,
-                false, (0.5, 0.5), ambiente_de(params.luz_del_dia), || {},
+                false, (0.5, 0.5), ambiente_de(params.luz_del_dia), 0, || {},
             );
             let ms_bandas = t1.elapsed().as_secs_f64() * 1000.0;
             bandas += ms_bandas;
@@ -3688,6 +3786,7 @@ fn main() {
             antialias,
             jitter,
             ambiente_de(params.luz_del_dia),
+            cuadro_taa,
             || reloj.actualizar(),
         );
         let ms_trazado = t_trazado.elapsed().as_secs_f32() * 1000.0;
