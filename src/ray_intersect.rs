@@ -15,6 +15,7 @@ static NEGRO: Material = Material {
     emission_color: None,
     relieve: None,
     rugosidad: 0.0,
+    causticas: 0.0,
 };
 
 /// Todo lo que el sombreado necesita saber de un impacto.

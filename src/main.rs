@@ -238,6 +238,21 @@ const MIN_CONTRIBUCION: f32 = 0.03;
 /// por debajo de eso la luz es literalmente invisible.
 const MIN_APORTE_LUZ: f32 = 0.004;
 
+/// La escala de las olas con la que se dibujan las causticas del fondo.
+///
+/// Es la misma que la de la superficie (`ripple_scale` del plano del agua,
+/// 3.0): con otra, los filamentos del fondo no caerian donde estan las
+/// olas de arriba.
+const CAUSTICA_ESCALA: f32 = 3.0;
+
+/// El color de la luz que la superficie concentra en el fondo.
+///
+/// Cyan clarisimo, casi blanco. Es luz, no pintura: va SUMADA, asi que lo
+/// que decide cuanto se ve es la potencia con la que se suma y no su
+/// saturacion, y un color muy saturado sumado sobre el teal del fondo daria
+/// un verde acido que no es lo que hace el agua.
+const CAUSTICA_COLOR: Color = Color::new(200, 245, 255, 255);
+
 /// Cuantos rayos de OCLUSION AMBIENTAL se tiran por impacto primario.
 ///
 /// La oclusion ambiental es cuanto cielo ve un punto. Un rincon ve poco y
@@ -521,6 +536,10 @@ fn cast_ray(
     // sienta amanecer: lo que separa el dia de la noche no son las luces
     // puntuales sino cuanta luz hay en el AIRE, y eso es exactamente esto.
     ambiente: [f32; 3],
+    // La fase de las olas en este cuadro, para que las causticas del fondo
+    // de la piscina se muevan con la superficie de arriba. Ver
+    // `plane::caustica`.
+    fase_agua: f32,
     // La semilla de azar de ESTE rayo: distinta por pixel y por cuadro.
     // De ella salen el desvio del reflejo y el punto de la luz al que
     // apunta el rayo de sombra. Ver `azar.rs`.
@@ -650,6 +669,31 @@ fn cast_ray(
         scale_color(base_color, intersect.material.albedo[0]),
         [ambiente[0] * visible, ambiente[1] * visible, ambiente[2] * visible],
     );
+
+    // --- CAUSTICAS ---
+    //
+    // El fondo de la piscina recibe la luz que la superficie de arriba
+    // CONCENTRA: una red de filamentos brillantes que se mueve con las
+    // olas. Se suma al ambiente y no a una luz en particular porque no
+    // viene de una sola: el agua concentra todo lo que le llega, y en esta
+    // escena eso es la luz cenital, la del agua y el cielo a la vez.
+    //
+    // Se calcula con la MISMA suma de olas que inclina la superficie
+    // (`plane::pendiente_de_las_olas`), asi que los filamentos caen donde
+    // la ola que los produce esta plana. Con dos animaciones distintas se
+    // leerian como dos capas superpuestas.
+    if intersect.material.causticas > 0.0 {
+        let c = plane::caustica(
+            intersect.point.x,
+            intersect.point.z,
+            CAUSTICA_ESCALA,
+            fase_agua,
+        );
+        lit = add_colors(
+            lit,
+            scale_color(CAUSTICA_COLOR, c * intersect.material.causticas),
+        );
+    }
 
     for light in lights {
         // CORTE TEMPRANO POR APORTE.
@@ -841,6 +885,7 @@ fn cast_ray(
             max_depth,
             peso_reflexion,
             ambiente,
+            fase_agua,
             // Cada rebote sortea distinto: con la misma semilla, el
             // reflejo de un reflejo se desviaria en la misma direccion y
             // el ruido saldria correlacionado entre niveles.
@@ -877,6 +922,7 @@ fn cast_ray(
             max_depth,
             peso_refraccion,
             ambiente,
+            fase_agua,
             azar::revolver(semilla ^ 0x1234_5679),
         );
         refraction = scale_color(refraction_color, peso_kt);
@@ -950,6 +996,8 @@ fn render(
     jitter: (f32, f32),
     // La luz ambiente de este cuadro. Ver `cast_ray`.
     ambiente: [f32; 3],
+    // La fase de las olas de este cuadro. Ver `cast_ray`.
+    fase_agua: f32,
     // El numero de cuadro. Ver `render_rows`.
     cuadro: u32,
     mut entre_bandas: impl FnMut(),
@@ -972,6 +1020,7 @@ fn render(
             antialias,
             jitter,
             ambiente,
+            fase_agua,
             cuadro,
             fila,
             hasta,
@@ -999,6 +1048,8 @@ fn render_rows(
     jitter: (f32, f32),
     // La luz ambiente de este cuadro. Ver `cast_ray`.
     ambiente: [f32; 3],
+    // La fase de las olas de este cuadro. Ver `cast_ray`.
+    fase_agua: f32,
     // El numero de cuadro, que entra en la semilla de azar de cada pixel.
     // Tiene que CAMBIAR entre cuadros: es lo que hace que el acumulador
     // temporal promedie muestras distintas y los reflejos borrosos y las
@@ -1109,6 +1160,7 @@ fn render_rows(
                         max_depth,
                         1.0,
                         ambiente,
+                        fase_agua,
                         azar::semilla(x, y, cuadro),
                     );
 
@@ -1296,7 +1348,7 @@ struct PostGpu {
 }
 
 /// Los parametros fijos de los god rays.
-const GODRAYS_DENSITY: f32 = 0.5;
+const GODRAYS_DENSITY: f32 = 0.68;
 const GODRAYS_WEIGHT: f32 = 0.2;
 const GODRAYS_DECAY: f32 = 0.95;
 // BAJADA de 0.5 a 0.24 junto con el cambio de bloom. Los god rays caminan
@@ -1310,7 +1362,7 @@ const GODRAYS_DECAY: f32 = 0.95;
 /// EXPOSICION DE BASE de los rayos, la que tienen entre golpe y golpe.
 ///
 /// El valor sube con `GODRAYS_PULSO` en cada tiempo. Ver `god_rays`.
-const GODRAYS_EXPOSURE: f32 = 0.17;
+const GODRAYS_EXPOSURE: f32 = 0.25;
 
 /// CUANTO SE ENCIENDEN LOS HACES EN EL GOLPE.
 ///
@@ -1331,7 +1383,7 @@ const GODRAYS_EXPOSURE: f32 = 0.17;
 /// aquello era un valor SOSTENIDO y esto es un pico de 120 milisegundos.
 /// Lo que como promedio permanente era un velo blanco, como transitorio es
 /// un destello.
-const GODRAYS_PULSO: f32 = 0.38;
+const GODRAYS_PULSO: f32 = 0.45;
 const GODRAYS_SAMPLES: i32 = 60;
 
 impl PostGpu {
@@ -2488,7 +2540,10 @@ fn main() {
         Texture::ImageTexture(cargar("fairy_marble.png"), color_f(0.30, 0.45, 0.50), (0.0, 0.0)),
         None,
     )
-    .con_relieve(relieve_marmol.clone(), 1.0);
+    .con_relieve(relieve_marmol.clone(), 1.0)
+    // El fondo de la piscina es el unico que lleva causticas: es el que
+    // tiene agua encima. Ver `Material::causticas`.
+    .con_causticas(1.3);
 
     // El marmol del piso de la plaza: el mismo, pero PULIDO. Mas
     // reflexion, y Fresnel la lleva a espejo a angulo rasante: la fuente
@@ -3585,6 +3640,7 @@ fn main() {
         let mut costo_acum = 0.0f64;
         let mut cam = orbita.camara(2.0);
         let mut ambiente_ultimo = ambiente_de(0.0);
+        let mut fase_agua_ultima = 0.0f32;
 
         for n in 0..CUADROS {
             let t = t0 + n as f32 * DT;
@@ -3598,10 +3654,11 @@ fn main() {
             // tiene que usar EXACTAMENTE la misma luz, o la comparacion
             // mediria el cambio de hora en vez del antialiasing.
             ambiente_ultimo = ambiente_de(params.luz_del_dia);
+            fase_agua_ultima = params.tiempo * animacion::AGUA_VELOCIDAD;
             fb.clear();
             render_rows(
                 &mut fb, &objects, &cielo, &arbol, &arbol_sombras, &lights, &cam, MAX_DEPTH,
-                false, jitter, ambiente_ultimo, n, 0, h,
+                false, jitter, ambiente_ultimo, fase_agua_ultima, n, 0, h,
             );
 
             if n + 1 == CUADROS {
@@ -3625,7 +3682,7 @@ fn main() {
         let mut ref_fb = Framebuffer::new(w, h, BACKGROUND);
         render_rows(
             &mut ref_fb, &objects, &cielo, &arbol, &arbol_sombras, &lights, &cam, MAX_DEPTH,
-            true, (0.5, 0.5), ambiente_ultimo, 0, 0, h,
+            true, (0.5, 0.5), ambiente_ultimo, fase_agua_ultima, 0, 0, h,
         );
         let _ = image::RgbaImage::from_raw(w as u32, h as u32, ref_fb.to_rgba_opaco())
             .map(|img| img.save(format!("{dir}/taa_referencia.png")));
@@ -3664,7 +3721,8 @@ fn main() {
             let t0 = std::time::Instant::now();
             render_rows(
                 &mut fb, &objects, &cielo, &arbol, &arbol_sombras, &lights, &cam, MAX_DEPTH,
-                false, (0.5, 0.5), ambiente_de(params.luz_del_dia), 0, 0, h,
+                false, (0.5, 0.5), ambiente_de(params.luz_del_dia),
+                params.tiempo * animacion::AGUA_VELOCIDAD, 0, 0, h,
             );
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
 
@@ -3678,7 +3736,8 @@ fn main() {
             let t1 = std::time::Instant::now();
             render(
                 &mut fb, &objects, &cielo, &arbol, &arbol_sombras, &lights, &cam, MAX_DEPTH,
-                false, (0.5, 0.5), ambiente_de(params.luz_del_dia), 0, || {},
+                false, (0.5, 0.5), ambiente_de(params.luz_del_dia),
+                params.tiempo * animacion::AGUA_VELOCIDAD, 0, || {},
             );
             let ms_bandas = t1.elapsed().as_secs_f64() * 1000.0;
             bandas += ms_bandas;
@@ -3941,6 +4000,7 @@ fn main() {
             antialias,
             jitter,
             ambiente_de(params.luz_del_dia),
+            params.tiempo * animacion::AGUA_VELOCIDAD,
             cuadro_taa,
             || reloj.actualizar(),
         );

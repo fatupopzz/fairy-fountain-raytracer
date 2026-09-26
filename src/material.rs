@@ -43,6 +43,13 @@ pub struct Material {
     /// por CERO rayos extra: es el mismo rayo de siempre, apuntado un poco
     /// distinto en cada cuadro.
     pub rugosidad: f32,
+    /// CUANTA CAUSTICA le dibuja encima el agua que tiene arriba.
+    ///
+    /// En 0 el material no sabe que hay agua. Lo usa el fondo de la
+    /// piscina: la superficie de arriba concentra la luz en una red de
+    /// filamentos que se mueven con las olas, y esa red es de las cosas
+    /// mas reconocibles que tiene el agua. Ver `plane::caustica`.
+    pub causticas: f32,
 }
 
 impl Material {
@@ -61,11 +68,18 @@ impl Material {
             emission_color,
             relieve: None,
             rugosidad: 0.0,
+            causticas: 0.0,
         }
     }
 
     /// El mismo material con relieve: `mapa` es el mapa de normales y
     /// `repeticiones` cuantas veces entra en el rango UV de la superficie.
+    /// El mismo material con causticas encima. Ver `causticas`.
+    pub fn con_causticas(mut self, causticas: f32) -> Self {
+        self.causticas = causticas;
+        self
+    }
+
     /// El mismo material con el reflejo desenfocado. Ver `rugosidad`.
     pub fn con_rugosidad(mut self, rugosidad: f32) -> Self {
         self.rugosidad = rugosidad;

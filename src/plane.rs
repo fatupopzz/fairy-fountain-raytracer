@@ -34,6 +34,68 @@ impl Limite {
     }
 }
 
+/// LOS TRENES DE OLAS de la superficie del agua, compartidos entre la
+/// superficie y el fondo de la piscina.
+///
+/// Que sean LOS MISMOS es todo el punto. La superficie los usa para
+/// inclinar su normal y el fondo para dibujar las causticas, y una
+/// caustica que no coincida con la ola que la produjo se nota de
+/// inmediato: se leen como dos animaciones distintas puestas una encima de
+/// la otra.
+///
+/// (direccion x, direccion z, numero de onda, amplitud)
+pub const ONDAS: [(f32, f32, f32, f32); 4] = [
+    (0.92, 0.39, 1.00, 0.34),
+    (-0.51, 0.86, 1.73, 0.16),
+    (0.31, -0.95, 3.11, 0.062),
+    (-0.87, -0.49, 5.40, 0.028),
+];
+
+/// Cuanto se inclina la superficie en (x, z): la pendiente de la suma de
+/// los trenes de olas, en los dos ejes.
+pub fn pendiente_de_las_olas(x: f32, z: f32, k: f32, fase: f32) -> (f32, f32) {
+    let (mut sx, mut sz) = (0.0, 0.0);
+    for (dx, dz, onda, amplitud) in ONDAS {
+        let w = k * onda;
+        // La velocidad va con la raiz del largo, o sea con la inversa de
+        // la raiz del numero de onda.
+        let velocidad = onda.sqrt().recip();
+        let pendiente = amplitud * w * ((x * dx + z * dz) * w + fase * velocidad).cos();
+        sx += pendiente * dx;
+        sz += pendiente * dz;
+    }
+    (sx, sz)
+}
+
+/// LA CAUSTICA en (x, z): cuanta luz concentra ahi la superficie de arriba.
+///
+/// Una caustica es luz que la superficie del agua CONCENTRA. Donde el agua
+/// esta curvada hacia adentro hace de lente y junta los rayos en una linea
+/// brillante; donde esta curvada al reves los separa y queda oscuro. Las
+/// lineas brillantes son las curvas caustics: geometricamente, los pliegues
+/// del mapa que lleva cada rayo de la superficie al fondo, o sea donde ese
+/// mapa deja de ser invertible.
+///
+/// Calcular eso de verdad pide seguir los rayos refractados y ver donde se
+/// amontonan, que es todo un metodo (photon mapping) y no entra en el
+/// presupuesto de esta escena. Pero el pliegue esta donde la superficie
+/// cambia de curvatura, y eso es donde su PENDIENTE CRUZA POR CERO. Asi
+/// que la red de filamentos se consigue igual que las vetas del marmol:
+/// tomando lo que esta cerca del contorno cero y elevandolo a una potencia
+/// alta para dejarlo fino.
+///
+/// No es la caustica exacta —la de verdad tiene las puntas afiladas de una
+/// catastrofe de pliegue y esta es simetrica— pero se mueve con las olas
+/// que la producen, que es de donde viene casi todo lo que la hace creible.
+pub fn caustica(x: f32, z: f32, k: f32, fase: f32) -> f32 {
+    let (sx, sz) = pendiente_de_las_olas(x, z, k, fase);
+    // El largo de la pendiente: cero justo en las crestas y los valles,
+    // maximo en las laderas.
+    let m = (sx * sx + sz * sz).sqrt();
+    // Cerca de cero => filamento. La potencia decide el grosor.
+    (1.0 - (m / 0.45).min(1.0)).powi(6)
+}
+
 /// Plano definido por un punto y su normal. Infinito, salvo que tenga
 /// `limite`. Para el agua de la fuente: point a la altura del agua, normal
 /// apuntando arriba.
@@ -164,23 +226,9 @@ impl Plane {
         //     suelto. Sin eso los trenes se mueven en bloque y el conjunto
         //     se lee como una sola textura deslizandose.
         //
-        // (direccion x, direccion z, numero de onda, amplitud)
-        const ONDAS: [(f32, f32, f32, f32); 4] = [
-            (0.92, 0.39, 1.00, 0.34),
-            (-0.51, 0.86, 1.73, 0.16),
-            (0.31, -0.95, 3.11, 0.062),
-            (-0.87, -0.49, 5.40, 0.028),
-        ];
-        for (dx_o, dz_o, onda, amplitud) in ONDAS {
-            let w = k * onda;
-            // La velocidad va con la raiz del largo, o sea con la inversa
-            // de la raiz del numero de onda.
-            let velocidad = onda.sqrt().recip();
-            let fase = (point.x * dx_o + point.z * dz_o) * w + self.ripple_phase * velocidad;
-            let pendiente = amplitud * w * fase.cos();
-            slope_x += pendiente * dx_o;
-            slope_z += pendiente * dz_o;
-        }
+        let (px, pz) = pendiente_de_las_olas(point.x, point.z, k, self.ripple_phase);
+        slope_x += px;
+        slope_z += pz;
 
         // La normal de una superficie de altura h(x, z) es (-dh/dx, 1, -dh/dz).
         normalize(&Vec3::new(

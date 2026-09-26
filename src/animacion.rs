@@ -227,7 +227,7 @@ pub const POLVO_ALCANCE: f32 = 0.45;
 /// segundo. Con la escala de 3 anillos por unidad, 2.4 rad/s es una ola
 /// que cruza la piscina en unos ocho segundos: lento, es una fuente y no
 /// una playa.
-const AGUA_VELOCIDAD: f32 = 1.5;
+pub const AGUA_VELOCIDAD: f32 = 1.5;
 
 /// Donde esta y cuanto se ve el hada numero `k` (de `total`) en el segundo
 /// `tiempo`, partiendo de donde nacio: `(posicion, presencia)`, con
