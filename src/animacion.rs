@@ -22,6 +22,7 @@ use crate::plane::Plane;
 use crate::ray_intersect::RayIntersect;
 use crate::sphere::Sphere;
 use crate::sync::SceneParams;
+use crate::toro::Toro;
 use crate::triangle::Triangle;
 use crate::vec3::Vec3;
 use raylib::prelude::Color;
@@ -47,6 +48,10 @@ pub struct EscenaViva {
     /// margen, como las hadas, porque cruzan la escena entera y la caja
     /// no se recalcula.
     estelas: Vec<usize>,
+    /// EL GRUPO DE LOS ANILLOS que rodean la Trifuerza: los toros. Un solo
+    /// grupo con los `ANILLOS` adentro, armado con margen porque los
+    /// anillos GIRAN y la caja del arbol se arma una sola vez.
+    anillos: Vec<usize>,
     /// La intensidad con la que se construyo cada luz puntual.
     luces_base: Vec<f32>,
     /// Donde esta el agua: `(indice del grupo, indice del hijo)`. Es un
@@ -85,6 +90,7 @@ impl EscenaViva {
         EscenaViva {
             orbes: Vec::new(),
             estelas: Vec::new(),
+            anillos: Vec::new(),
             luces_base: Vec::new(),
             agua: None,
             agua_emision: None,
@@ -141,6 +147,11 @@ impl EscenaViva {
     /// Anota el grupo de UNA estela del arpa. Se llama una vez por ranura.
     pub fn registrar_estela(&mut self, grupo: usize) {
         self.estelas.push(grupo);
+    }
+
+    /// Anota el grupo de los anillos de la Trifuerza.
+    pub fn registrar_anillos(&mut self, grupo: usize) {
+        self.anillos.push(grupo);
     }
 
     pub fn registrar_luces(&mut self, luces: &[Light]) {
@@ -523,6 +534,88 @@ fn actualizar_estelas(
     }
 }
 
+/// CUANTOS ANILLOS RODEAN LA TRIFUERZA.
+///
+/// Tres. Con dos se lee como un adorno simetrico y con cuatro ya es una
+/// jaula: el simbolo que hay adentro tiene que seguir siendo lo que se
+/// mira. Ver `toro.rs` por que un anillo es un TORO y no una esfera
+/// achatada.
+pub const ANILLOS: usize = 3;
+
+/// Del centro del agujero al centro del tubo. La Trifuerza mide 1.36 de
+/// ancho; con 1.38 los anillos la ABRAZAN, que es lo que se busca. Se
+/// probo con 1.5 y en cuadro se la tragan: el anillo pasa por delante del
+/// agua y el ojo lee tres aros con algo adentro en vez de la Trifuerza
+/// rodeada.
+pub const ANILLO_RADIO: f32 = 1.38;
+
+/// El grosor del tubo. Fino: un anillo grueso tapa, y lo que tiene que
+/// hacer es dibujar una linea de luz en el aire.
+pub const ANILLO_GROSOR: f32 = 0.055;
+
+/// A que altura viven, que es la del medio de la Trifuerza.
+pub const ANILLO_Y: f32 = 1.95;
+
+/// Los anillos giran: se les escribe el eje y la emision.
+///
+/// EL GIRO ES UNA PRECESION, no una vuelta. Cada anillo esta inclinado y su
+/// eje da vueltas alrededor de la vertical, como un giroscopo: asi el
+/// anillo cambia de silueta todo el tiempo (de circulo a elipse a linea) en
+/// vez de girar sobre si mismo, que en un anillo liso no se veria.
+///
+/// Las tres inclinaciones y las tres velocidades son distintas y no son
+/// multiplos: si lo fueran, los tres volverian a la misma pose cada tanto y
+/// el ojo agarraria el ciclo.
+///
+/// La fase sale de `giro_hadas`, que se cuenta en BEATS: los anillos giran
+/// al tempo de la cancion aunque el movimiento sea demasiado lento para
+/// que se note a que velocidad va.
+fn actualizar_anillos(
+    objetos: &mut [Box<dyn RayIntersect + Send + Sync>],
+    escena: &EscenaViva,
+    params: &SceneParams,
+) {
+    // El color de cada anillo: los mismos tres de las hadas, para que se
+    // lean como de la misma familia que todo lo que flota en la cueva.
+    const PALETA: [(f32, f32, f32); ANILLOS] =
+        [(1.0, 0.62, 0.88), (0.52, 0.88, 1.0), (1.0, 0.88, 0.55)];
+    const INCLINACION: [f32; ANILLOS] = [0.42, 1.05, 1.62];
+    const VELOCIDAD: [f32; ANILLOS] = [0.60, -0.37, 0.23];
+
+    for &indice in &escena.anillos {
+        let Some(objeto) = objetos.get_mut(indice) else {
+            continue;
+        };
+        let Some(grupo) = (objeto.as_mut() as &mut dyn Any).downcast_mut::<GrupoAcotado>() else {
+            continue;
+        };
+
+        for (k, hijo) in grupo.children_mut().iter_mut().enumerate().take(ANILLOS) {
+            let Some(anillo) = (hijo.as_mut() as &mut dyn Any).downcast_mut::<Toro>() else {
+                continue;
+            };
+
+            let fase = params.giro_hadas * VELOCIDAD[k] + k as f32 * 2.1;
+            let (sf, cf) = fase.sin_cos();
+            let (si, ci) = INCLINACION[k].sin_cos();
+            anillo.set_eje(Vec3::new(si * cf, ci, si * sf));
+
+            // CUANTO BRILLAN: la armonia de su region mas el golpe, y todo
+            // escalado por `cine`. Al principio del tema son tres hilos
+            // apenas visibles y sobre el final son de las cosas que mas
+            // brillan, igual que el resto de la escena.
+            let (r, g, b) = PALETA[k];
+            let fuerza = (0.22 + params.armonia[k] * 0.60 + params.pulso * 0.25)
+                * (0.40 + 0.60 * params.cine);
+            let canal = |x: f32| (x * 255.0 * fuerza).clamp(0.0, 255.0) as u8;
+            anillo.material_mut().emission_color =
+                Some(Color::new(canal(r), canal(g), canal(b), 255));
+        }
+
+        grupo.recalcular_caja(0.02);
+    }
+}
+
 pub fn actualizar_escena(
     objetos: &mut [Box<dyn RayIntersect + Send + Sync>],
     luces: &mut [Light],
@@ -530,6 +623,7 @@ pub fn actualizar_escena(
     params: &SceneParams,
 ) {
     actualizar_estelas(objetos, escena, params);
+    actualizar_anillos(objetos, escena, params);
 
     // Las hadas: caen despacio, se deshacen con el arpa y renacen, y
     // brillan con la cancion. La presencia entra en el radio Y en la

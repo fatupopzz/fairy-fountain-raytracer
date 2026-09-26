@@ -67,8 +67,10 @@
 //!   - `bvh.rs`        el arbol que evita probar todos los objetos;
 //!   - `cube.rs`       los cuboides de la fuente, la cueva y los cristales;
 //!                     `cylinder.rs` las columnas, `plane.rs` el agua,
-//!                     `sphere.rs` las hadas y `triangle.rs` la Triforce y
-//!                     las puntas de los cristales;
+//!                     `sphere.rs` las hadas, `triangle.rs` la Triforce y
+//!                     las puntas de los cristales, y `toro.rs` los anillos
+//!                     que la rodean (la unica figura que pide resolver una
+//!                     cuartica);
 //!   - este archivo    construir la escena, trazarla y armar el pipeline
 //!                     de post-procesado en la GPU.
 //!
@@ -114,6 +116,7 @@ mod vec3;
 mod cylinder;
 mod plane;
 mod sphere;
+mod toro;
 mod triangle;
 
 use animacion::EscenaViva;
@@ -138,6 +141,7 @@ use std::f32::consts::PI;
 use std::sync::Arc;
 use texture::{Texture, TextureImage};
 #[allow(unused_imports)]
+use toro::Toro;
 use triangle::Triangle;
 
 const WIDTH: usize = 800;
@@ -3181,6 +3185,47 @@ fn main() {
         (2..5).map(|i| (i, emision_triforce)).collect(),
     );
     objects.push(Box::new(GrupoAcotado::new(altar)));
+
+    // --- 5a. LOS ANILLOS DE LA TRIFUERZA ---
+    //
+    // Tres toros finos rodeandola, inclinados y girando despacio (ver
+    // `animacion::actualizar_anillos`). Son la unica figura de la escena
+    // que no se resuelve con una cuadratica: la interseccion de un rayo con
+    // un toro sale de una CUARTICA, y `toro.rs` la resuelve por Ferrari.
+    //
+    // Emisivos, o sea que no tapan la luz y quedan afuera del arbol de
+    // sombras: tres anillos proyectando sombra sobre la Trifuerza la
+    // taparian justo a ella, que es el objeto que le da sentido a la
+    // escena. Lo que hacen es dibujar tres lineas de luz en el aire.
+    //
+    // EL GRUPO VA CON MARGEN, y el margen es el radio entero: los anillos
+    // GIRAN y el arbol se queda con la caja del momento en que se armo (esa
+    // leccion ya la dejaron las estelas). Girando, un anillo barre la
+    // esfera de radio `ANILLO_RADIO + ANILLO_GROSOR`, y esa tiene que ser
+    // su caja de nacimiento.
+    let centro_anillos = Vec3::new(0.0, animacion::ANILLO_Y, 0.0);
+    let anillos: Vec<Box<dyn RayIntersect + Send + Sync>> = (0..animacion::ANILLOS)
+        .map(|_| {
+            Box::new(Toro::nuevo(
+                centro_anillos,
+                Vec3::new(0.0, 1.0, 0.0),
+                animacion::ANILLO_RADIO,
+                animacion::ANILLO_GROSOR,
+                Material::new(
+                    [0.25, 0.85, 0.0, 0.0],
+                    28.0,
+                    0.0,
+                    Texture::Solid(Color::new(210, 225, 255, 255)),
+                    Some(Color::new(120, 140, 200, 255)),
+                ),
+            )) as Box<dyn RayIntersect + Send + Sync>
+        })
+        .collect();
+    escena.registrar_anillos(objects.len());
+    objects.push(Box::new(GrupoAcotado::con_margen(
+        anillos,
+        animacion::ANILLO_RADIO + animacion::ANILLO_GROSOR,
+    )));
 
     // --- 5b. LOS CRISTALES ---
     // Cuatro racimos en las esquinas de la plaza: un cristal alto y dos

@@ -104,7 +104,12 @@ detectar) y el golpe del bajo.
   punto, producto cruz, normalización y los operadores. Sin librería de
   álgebra lineal — en un trazador de rayos eso es justamente la parte que
   hay que mostrar.
-- Cuboides, cilindros, planos recortados, esferas y triángulos.
+- Cuboides, cilindros, planos recortados, esferas, triángulos y **toros**.
+- El **toro** (`src/toro.rs`) es la única figura que no se resuelve con una
+  cuadrática: sustituyendo el rayo en su ecuación implícita queda una
+  **cuártica**, que se resuelve por Ferrari (deprimir, cúbica resolvente,
+  dos cuadráticas) en `f64`, porque en `f32` los rayos rasantes se pierden y
+  el anillo hierve. Tres de ellos rodean la Trifuerza y giran en precesión.
 - Materiales con textura, mapa de relieve, reflexión y refracción con
   **Fresnel** (aproximación de Schlick) y sombras translúcidas: el agua y el
   cristal dejan pasar parte de la luz, así que el fondo de la piscina se
