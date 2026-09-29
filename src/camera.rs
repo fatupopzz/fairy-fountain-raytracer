@@ -51,3 +51,9 @@ impl Camera {
         (right, up, forward)
     }
 }
+
+/// El campo visual vertical de la camara: 52 grados. Eran 45, que en la
+/// cueva alcanzaba; con la isla en el cielo abierto, siete grados mas son
+/// los que dejan entrar la aurora por encima de la fuente sin alejar la
+/// camara hasta perderla.
+pub const CAMPO_VISUAL: f32 = 52.0 * std::f32::consts::PI / 180.0;

@@ -49,6 +49,10 @@ pub const ATAQUES_VENTANA: f32 = 60.0;
 /// `ESTELA_VIDA = 1.5` sobra el doble.
 pub const ESTELAS_VENTANA: f32 = 3.0;
 
+/// Cuantos segundos de golpes se le pasan a la escena para los anillos del
+/// agua: los que duran mas que esto ya llegaron al borde de la piscina.
+pub const ONDAS_VENTANA: f32 = 2.2;
+
 /// Lo mismo para las estrellas fugaces, que viven `ESTRELLA_VIDA` (1.9 s).
 pub const ESTRELLAS_VENTANA: f32 = 3.5;
 
@@ -815,6 +819,28 @@ impl SyncData {
         salidas
     }
 
+    /// LOS GOLPES DE LA CANCION, para los anillos del agua: cada beat de los
+    /// ultimos `ventana` segundos, como (segundo, fuerza).
+    ///
+    /// La fuerza tiene dos factores. El ACENTO: el uno del compas pega
+    /// entero y los otros tres tiempos a un tercio, que es lo que hace que
+    /// el agua marque el compas y no solo el pulso. Y la ENERGIA del tema
+    /// en ese momento: en la intro, con el arpa sola, los anillos son un
+    /// susurro; en el coro, olas de luz. Las dos cosas se miden EN EL BEAT
+    /// y no en `t`, asi que un anillo no cambia de fuerza mientras corre.
+    fn golpes_hasta(&self, t: f32, ventana: f32) -> Vec<(f32, f32)> {
+        let desde = self.beats.partition_point(|&b| b < t - ventana);
+        let hasta = self.beats.partition_point(|&b| b <= t);
+        (desde..hasta)
+            .map(|i| {
+                let beat = self.beats[i];
+                let acento = if i % 4 == 0 { 1.0 } else { 0.33 };
+                let energia = self.energia_suave(beat, 1.5);
+                (beat, acento * (0.25 + energia * 1.6).min(1.2))
+            })
+            .collect()
+    }
+
     /// HACE CUANTO QUE NO PEGA EL ARPA, en segundos, mirando como mucho
     /// `ALCANCE` segundos hacia atras.
     ///
@@ -1432,6 +1458,7 @@ impl SyncData {
             ataques: self.ataques_hasta(t, ATAQUES_VENTANA),
             estelas: self.estelas_hasta(t, ESTELAS_VENTANA),
             estrellas: self.estrellas_hasta(t, ESTRELLAS_VENTANA),
+            ondas: self.golpes_hasta(t, ONDAS_VENTANA),
             swell,
             laser_emissions,
             camera_target_y: self.mira_y_suave(t),
@@ -1478,7 +1505,12 @@ impl SyncData {
             // demasiado para un lugar que tiene que sentirse en calma. Queda
             // un fantasma de simetria en el fondo solo en los ataques del
             // arpa, que se desvanece con ellos.
-            kal_mix: 0.18 * flash_lento,
+            //
+            // Y AHORA APAGADO DEL TODO. Plegaba "el fondo", que en la cueva
+            // era roca; con la isla en el cielo abierto el fondo es la aurora
+            // y las nubes, y un cielo plegado en espejo se lee como una falla
+            // de la imagen y no como magia. El shader queda en la cadena.
+            kal_mix: 0.0 * flash_lento,
 
             // La aberracion sigue al mismo destello lento: base casi
             // imperceptible para que la lente tenga un poco de personalidad,
@@ -1591,6 +1623,9 @@ pub struct SceneParams {
     /// Los tiempos que lanzan una estrella fugaz, igual que `estelas` pero
     /// en el tercer tiempo del compas (ver `SyncData::estrellas_hasta`).
     pub estrellas: Vec<(usize, f32)>,
+    /// Los golpes recientes como (segundo, fuerza): de cada uno sale un
+    /// anillo de luz en el agua. Ver `SyncData::golpes_hasta`.
+    pub ondas: Vec<(f32, f32)>,
     /// EL "AAAAA", de 0 a 1: cuanto esta la cancion sostenida en vez de
     /// tocada. Es lo que enciende la aurora del cielo. Ver
     /// `SyncData::swell`.

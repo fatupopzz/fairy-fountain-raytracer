@@ -68,13 +68,11 @@ const LUNA_RADIO: f32 = 0.045;
 /// donde la cortina ya se esta apagando, o sea un velo verdoso sin forma.
 /// Subida a doce grados, con el lomo a los cuatro, lo que entra en la
 /// franja visible es el CUERPO.
-const AURORA_ALTO: f32 = 0.21;
+const AURORA_ALTO: f32 = 1.05;
 
 /// Cuanto ondula el borde de arriba de la cortina, en radianes.
-const AURORA_ONDA: f32 = 0.06;
+const AURORA_ONDA: f32 = 0.07;
 
-/// A que fraccion del alto esta el lomo de la cortina.
-const AURORA_LOMO: f32 = 0.35;
 
 /// Cuanto dura una estrella fugaz, en segundos.
 const ESTRELLA_VIDA: f32 = 1.9;
@@ -126,7 +124,24 @@ pub struct Cielo {
     /// EL "AAAAA", de 0 a 1: cuanto esta la cancion sostenida en vez de
     /// tocada. Es lo unico que enciende la aurora. Ver `SyncData::swell`.
     swell: f32,
+    /// El golpe del momento (`SceneParams::pulso`): la aurora se enciende
+    /// un poco mas en cada tiempo fuerte. Lo pone `musica`.
+    pulso: f32,
+    /// EL MAR DE NUBES que hay debajo de la isla, horneado al arrancar: la
+    /// densidad y cuanto le da la luz, por texel de una imagen
+    /// equirectangular de la mitad de abajo del cielo. Van aparte de la
+    /// imagen del cielo porque su COLOR no es fijo: rosa y oro al alba,
+    /// indigo de luna a la noche, y verdoso cuando la aurora esta arriba.
+    nubes: Vec<(f32, f32)>,
 }
+
+/// Resolucion y alcance de la imagen de las nubes: de `NUBES_TECHO` de
+/// elevacion (apenas sobre el horizonte, para que el borde se funda con el
+/// cielo) hasta `NUBES_PISO` (mirando bastante hacia abajo).
+const NUBES_ANCHO: usize = 1024;
+const NUBES_ALTO: usize = 192;
+const NUBES_TECHO: f32 = 0.06;
+const NUBES_PISO: f32 = -1.25;
 
 impl Cielo {
     /// Genera el cielo entero. Tarda unas decenas de milisegundos, una vez.
@@ -237,7 +252,25 @@ impl Cielo {
             amanecer: 0.0,
             estrellas: Vec::new(),
             swell: 0.0,
+            pulso: 0.0,
+            nubes: hornear_nubes(),
         }
+    }
+
+    /// Lo que la musica le pide al cielo ademas de la hora: el golpe.
+    pub fn musica(&mut self, pulso: f32) {
+        self.pulso = pulso.clamp(0.0, 1.5);
+    }
+
+    /// Cuanta aurora hay AHORA, de 0 a ~1.3, antes de la forma.
+    ///
+    /// Antes la aurora solo salia con las voces sostenidas (el swell, diecinueve
+    /// segundos del tema). Ahora vive TODA LA NOCHE, tenue, y el swell la
+    /// lleva a pleno; encima, cada tiempo fuerte le da un latido. Es lo que
+    /// hace que el cielo tambien toque la cancion, y no solo la fuente.
+    fn fuerza_aurora(&self) -> f32 {
+        let noche = (1.0 - self.amanecer * 1.6).clamp(0.0, 1.0);
+        noche * (0.55 + 0.60 * self.swell + 0.35 * self.pulso)
     }
 
     /// Deja el cielo en el estado de este cuadro: girado `giro` radianes y
@@ -302,41 +335,52 @@ impl Cielo {
     /// Es todo funcion de la direccion y del segundo, como el resto del
     /// cielo: cinco senos por rayo, y solo cuando el swell esta arriba.
     fn aurora(&self, azimut: f32, elevacion: f32) -> (f32, f32) {
-        if elevacion < -0.015 {
+        if !(0.0..AURORA_ALTO).contains(&elevacion) {
             return (0.0, 0.0);
         }
 
-        let deriva = self.tiempo * 0.035;
-        let onda = (azimut * 2.0 + deriva * 1.7).sin() * 0.55
-            + (azimut * 5.0 - deriva * 2.3).sin() * 0.30
-            + (azimut * 11.0 + deriva * 3.1).sin() * 0.15;
+        // Todo deriva lento, y un poco mas rapido cuando la cancion empuja.
+        let deriva = self.tiempo * (0.045 + 0.02 * self.swell);
 
-        let alto = AURORA_ALTO + AURORA_ONDA * onda;
-        if elevacion > alto {
+        // DOS CORTINAS, una delante de la otra, cada una con su borde de
+        // abajo ondulado. El borde de abajo es lo mas brillante y lo mas
+        // NITIDO de una aurora de verdad; hacia arriba la luz se deshilacha.
+        let mut total = 0.0f32;
+        let mut subida_pesada = 0.0f32;
+        for capa in 0..2 {
+            let c = capa as f32;
+            let base = 0.07 + c * 0.16
+                + AURORA_ONDA * ((azimut * (1.3 + c * 0.6) + deriva * (1.7 - c)).sin() * 0.6
+                    + (azimut * 3.7 - deriva * 2.3 + c * 2.0).sin() * 0.3
+                    + (azimut * 8.9 + deriva * 3.1).sin() * 0.1);
+            let alto = 0.40 + 0.16 * (azimut * 2.1 + deriva * 0.7 + c * 1.3).sin();
+            let x = (elevacion - base) / alto;
+            if !(-0.08..1.0).contains(&x) {
+                continue;
+            }
+            // Filo abajo, cola larga arriba.
+            let filo = ((x + 0.08) / 0.1).clamp(0.0, 1.0);
+            let cola = (-x * 2.6).exp() * (1.0 - suave((x - 0.7) / 0.3));
+            // Los rayos verticales: finos, brillantes y que se corren solos.
+            let rayo = (0.5 + 0.5 * (azimut * (46.0 + c * 17.0) + 3.0 * (azimut * 6.0 + deriva).sin() + deriva * 5.0).sin())
+                .powi(3);
+            let estrias = 0.35 + 0.65 * rayo;
+            // Los pliegues: la cortina se dobla y donde se dobla se ve mas.
+            let pliegue = 0.45 + 0.55 * (0.5 + 0.5 * (azimut * 4.0 + deriva * 1.1 + (azimut * 9.0).sin() * 0.8).sin());
+            let peso = filo * cola * estrias * pliegue * (1.0 - c * 0.45);
+            total += peso;
+            subida_pesada += x.max(0.0) * peso;
+        }
+        if total <= 0.0 {
             return (0.0, 0.0);
         }
-        let subida = (elevacion / alto.max(1e-3)).clamp(0.0, 1.0);
 
-        // El cuerpo de la cortina: crece rapido desde el suelo hasta el lomo
-        // y despues se apaga contra el borde de arriba. El lomo cae a los
-        // cuatro grados, que es donde el borde de roca deja de tapar.
-        let cuerpo =
-            (subida / AURORA_LOMO).min(1.0) * (1.0 - subida).powf(1.2) * 1.6;
+        // No da la vuelta entera: de un lado del cielo esta encendida y del
+        // otro casi no, y el lado encendido gira despacio.
+        let lobulo = 0.50 + 0.50 * (0.5 + 0.5 * (azimut - deriva * 0.8).sin());
+        let respira = 0.85 + 0.15 * (self.tiempo * 0.57).sin();
 
-        // Las estrias, que son lo que la hace una CORTINA y no niebla de
-        // color. La fase lleva la onda adentro, asi que no son rayas
-        // paralelas: se doblan con ella.
-        let estrias = 0.55 + 0.45 * (azimut * 48.0 + onda * 2.5 + deriva).sin().abs();
-
-        // Y NO DA LA VUELTA ENTERA: un lobulo ancho deja un lado del cielo
-        // encendido y el otro casi limpio. Una aurora pareja en los
-        // trescientos sesenta grados se lee como un filtro de color.
-        let lobulo = 0.35 + 0.65 * (0.5 + 0.5 * (azimut - deriva * 2.0).sin());
-
-        // Y RESPIRA: un ciclo cada once segundos, montado sobre el swell.
-        let respira = 0.80 + 0.20 * (self.tiempo * 0.57).sin();
-
-        (cuerpo * estrias * lobulo * respira * self.swell, subida)
+        (total * lobulo * respira * self.fuerza_aurora(), subida_pesada / total)
     }
 
     fn cerca_de_la_luna(&self, d: &Vec3) -> bool {
@@ -523,13 +567,18 @@ impl Cielo {
         // El angulo no se vuelve a calcular: `u` y `v` YA son la longitud y
         // la latitud de la direccion, asi que salen de dos multiplicaciones
         // y no de un `atan2` y un `asin` mas por rayo.
-        if self.swell > 0.0 && self.amanecer < 0.95 {
+        if self.fuerza_aurora() > 0.0 {
             let (fuerza, subida) = self.aurora((u - 0.5) * 2.0 * PI, (0.5 - v) * PI);
             if fuerza > 0.0 {
-                let f = fuerza * (1.0 - self.amanecer);
-                // Teal abajo y magenta arriba: la paleta de la fuente, que
-                // es de donde tiene que parecer que viene la luz.
-                let (r, g, b) = mezcla((70.0, 235.0, 170.0), (215.0, 110.0, 250.0), subida);
+                // Verde intenso en el filo, turquesa en el cuerpo y magenta
+                // arriba: la paleta de una aurora de verdad, que ademas es la
+                // de la fuente.
+                let (r, g, b) = if subida < 0.35 {
+                    mezcla((70.0, 255.0, 140.0), (40.0, 210.0, 200.0), subida / 0.35)
+                } else {
+                    mezcla((40.0, 210.0, 200.0), (210.0, 90.0, 255.0), ((subida - 0.35) / 0.5).min(1.0))
+                };
+                let f = fuerza.min(1.6);
                 let suma = |base: u8, c: f32| (base as f32 + c * f).min(255.0) as u8;
                 noche = Color::new(suma(noche.r, r), suma(noche.g, g), suma(noche.b, b), 255);
             }
@@ -558,8 +607,19 @@ impl Cielo {
             Color::new(mezcla(c.r, 0.92), mezcla(c.g, 0.96), mezcla(c.b, 1.0), 255)
         };
 
+        // EL MAR DE NUBES, debajo del horizonte. Va encima de todo lo del
+        // cielo (tambien del alba, que si no lavaria las nubes a lila) y
+        // debajo de las fugaces.
+        let nublar = |c: Color| {
+            if d.y < NUBES_TECHO.sin() {
+                self.con_nubes(c, u, d.y.clamp(-1.0, 1.0).asin())
+            } else {
+                c
+            }
+        };
+
         if self.amanecer <= 0.0 {
-            return con_fugaz(noche);
+            return con_fugaz(nublar(noche));
         }
 
         // El amanecer, en DOS CAPAS, y hacen falta las dos.
@@ -615,8 +675,117 @@ impl Cielo {
         g = canal(g, 110.0, 75.0) as f32;
         b = canal(b, 150.0, 20.0) as f32;
 
-        con_fugaz(Color::new(r as u8, g as u8, b as u8, 255))
+        con_fugaz(nublar(Color::new(r as u8, g as u8, b as u8, 255)))
     }
+}
+
+impl Cielo {
+    /// El cielo en `base`, con el mar de nubes encima si en esa direccion
+    /// hay. `u` es la longitud (la misma del cielo) y `elevacion` la de la
+    /// direccion, que aca siempre es baja.
+    fn con_nubes(&self, base: Color, u: f32, elevacion: f32) -> Color {
+        let v = ((NUBES_TECHO - elevacion) / (NUBES_TECHO - NUBES_PISO)).clamp(0.0, 1.0);
+        let x = ((u * NUBES_ANCHO as f32) as usize).min(NUBES_ANCHO - 1);
+        let y = ((v * (NUBES_ALTO - 1) as f32) as usize).min(NUBES_ALTO - 1);
+        let (densidad, luz) = self.nubes[y * NUBES_ANCHO + x];
+        if densidad <= 0.0 {
+            return base;
+        }
+
+        // El color de las nubes segun la hora. Tres tonos por hora: el de la
+        // copa que le da la luz, el de la panza en sombra, y el del VACIO
+        // que se ve entre nube y nube, que es mas profundo que las dos. Sin
+        // los tres la capa era un velo rosa parejo: el contraste entre la
+        // copa encendida y el hueco oscuro es lo que la hace nube.
+        let dia = self.amanecer;
+        let aurora = self.fuerza_aurora();
+        let copa = mezcla((90.0, 100.0, 175.0), (255.0, 222.0, 188.0), dia);
+        let panza = mezcla((22.0, 24.0, 58.0), (150.0, 112.0, 168.0), dia);
+        let (mut r, mut g, mut b) = mezcla(panza, copa, luz);
+        r += 15.0 * aurora * luz;
+        g += 110.0 * aurora * luz;
+        b += 75.0 * aurora * luz;
+
+        let vacio = mezcla(
+            (base.r as f32 * 0.8, base.g as f32 * 0.8, base.b as f32 * 0.9),
+            (92.0, 70.0, 138.0),
+            dia * 0.8,
+        );
+
+        // Pegado al horizonte, las nubes se funden con el resplandor del
+        // cielo en vez de cortar.
+        let horizonte = (1.0 - (-elevacion / 0.05)).clamp(0.0, 1.0);
+        let k = densidad;
+        let mezclado = |v: f32, n: f32| v + (n - v) * k;
+        let (fr, fg, fb) = (mezclado(vacio.0, r), mezclado(vacio.1, g), mezclado(vacio.2, b));
+        let canal = |c: u8, n: f32| (n + (c as f32 - n) * horizonte * 0.6).clamp(0.0, 255.0) as u8;
+        Color::new(canal(base.r, fr), canal(base.g, fg), canal(base.b, fb), 255)
+    }
+}
+
+/// Hornea el mar de nubes.
+///
+/// Cada texel es una direccion que mira hacia abajo; esa direccion corta un
+/// plano de nubes que esta muy por debajo de la isla, y el ruido se evalua
+/// EN ESE PUNTO DEL PLANO, no en el texel. Eso es lo que da la perspectiva:
+/// las nubes de abajo se ven grandes y las del horizonte se aplastan y se
+/// achican. Cerca del horizonte el punto se va al infinito y el ruido se
+/// volveria granito, asi que ahi se lo funde con su promedio.
+///
+/// La luz es la diferencia de densidad con un punto corrido hacia el sol: lo
+/// que tiene mas nube del lado del sol esta en sombra, y lo que tiene menos,
+/// en la copa iluminada. Es la receta vieja de las nubes en 2D.
+fn hornear_nubes() -> Vec<(f32, f32)> {
+    const ALTURA: f32 = 16.0;
+    const ESCALA: f32 = 11.0;
+    let fbm = |x: f32, z: f32| {
+        let mut suma = 0.0;
+        let mut peso = 0.5;
+        let mut f = 1.0;
+        for o in 0..5 {
+            suma += ruido_valor(x * f, z * f, 71 + o) * peso;
+            f *= 2.03;
+            peso *= 0.5;
+        }
+        suma / 0.97
+    };
+    let mut nubes = Vec::with_capacity(NUBES_ANCHO * NUBES_ALTO);
+    for y in 0..NUBES_ALTO {
+        let v = (y as f32 + 0.5) / NUBES_ALTO as f32;
+        let elevacion = NUBES_TECHO - v * (NUBES_TECHO - NUBES_PISO);
+        for x in 0..NUBES_ANCHO {
+            let u = (x as f32 + 0.5) / NUBES_ANCHO as f32;
+            let azimut = (u - 0.5) * 2.0 * PI;
+            if elevacion >= -0.002 {
+                // Sobre el horizonte, solo un velo que se apaga.
+                let velo = (1.0 - elevacion / NUBES_TECHO).clamp(0.0, 1.0) * 0.55;
+                nubes.push((velo, 0.4));
+                continue;
+            }
+            let distancia = (ALTURA / (-elevacion).tan()).min(600.0);
+            let (px, pz) = (azimut.cos() * distancia / ESCALA, azimut.sin() * distancia / ESCALA);
+            let lejos = (distancia / 220.0).clamp(0.0, 1.0);
+            let n = fbm(px, pz) * (1.0 - lejos) + 0.52 * lejos;
+            let densidad = suave((n - 0.44) / 0.18);
+            let corrido = fbm(px + 0.35, pz - 0.2) * (1.0 - lejos) + 0.52 * lejos;
+            let luz = (0.5 + (n - corrido) * 7.0).clamp(0.0, 1.0) * (0.35 + 0.65 * densidad);
+            // Al horizonte, un colchon parejo.
+            let densidad = densidad * (1.0 - lejos) + 0.85 * lejos;
+            nubes.push((densidad, luz));
+        }
+    }
+    nubes
+}
+
+/// Ruido de valor continuo en el plano, en [0, 1].
+fn ruido_valor(x: f32, z: f32, semilla: u32) -> f32 {
+    let (x0, z0) = (x.floor(), z.floor());
+    let (tx, tz) = (x - x0, z - z0);
+    let (sx, sz) = (tx * tx * (3.0 - 2.0 * tx), tz * tz * (3.0 - 2.0 * tz));
+    let h = |a: f32, b: f32| hash2((a as i32) as u32 ^ semilla.wrapping_mul(0x9e37_79b9), (b as i32) as u32);
+    let arriba = h(x0, z0) + (h(x0 + 1.0, z0) - h(x0, z0)) * sx;
+    let abajo = h(x0, z0 + 1.0) + (h(x0 + 1.0, z0 + 1.0) - h(x0, z0 + 1.0)) * sx;
+    arriba + (abajo - arriba) * sz
 }
 
 /// Gira un vector alrededor del eje Y.
@@ -732,7 +901,8 @@ mod tests {
         // Se busca una estrella barriendo el cielo.
         let mut estrella = None;
         for i in 0..4000 {
-            let d = direccion(i as f32 * 0.37, (i as f32 * 0.11).sin() * 0.9);
+            // Solo sobre el horizonte: abajo estan las nubes, que no titilan.
+            let d = direccion(i as f32 * 0.37, 0.1 + (i as f32 * 0.11).sin().abs() * 0.8);
             let c = cielo.color(&d);
             if c.r as u32 + c.g as u32 + c.b as u32 > TITILEO_UMBRAL + 60 && !cielo.cerca_de_la_luna(&d) {
                 estrella = Some(d);
@@ -823,49 +993,45 @@ mod tests {
         assert!(cielo.estrellas.is_empty(), "existe antes de lanzarse");
     }
 
-    /// LA AURORA: existe solo con las voces, vive pegada al horizonte y no
-    /// toca el cenit.
-    ///
-    /// Lo de la altura no es un detalle de gusto: la franja de cielo que se
-    /// ve por encima del borde de roca son unos siete grados, asi que una
-    /// aurora que se fuera para arriba no se veria nunca en cuadro.
+    /// LA AURORA: vive toda la noche, tenue, y las voces la encienden; de
+    /// dia no existe y nunca llega al cenit. Y no es un filtro de color: la
+    /// cortina tiene lados.
     #[test]
-    fn la_aurora_sale_con_las_voces_y_se_queda_abajo() {
+    fn la_aurora_vive_de_noche_y_crece_con_las_voces() {
         let mut cielo = Cielo::generar();
-
         let banda: Vec<Vec3> = (0..360)
-            .map(|a| direccion(a as f32 / 360.0 * std::f32::consts::TAU, 0.03))
+            .map(|a| direccion(a as f32 / 360.0 * std::f32::consts::TAU, 0.22))
             .collect();
-        let alto: Vec<Vec3> = (0..360)
-            .map(|a| direccion(a as f32 / 360.0 * std::f32::consts::TAU, 0.9))
+        let cenit: Vec<Vec3> = (0..36)
+            .map(|a| direccion(a as f32 / 36.0 * std::f32::consts::TAU, 1.4))
             .collect();
         let brillo = |c: &Cielo, ds: &[Vec3]| -> i32 {
             ds.iter().map(|d| { let x = c.color(d); x.r as i32 + x.g as i32 + x.b as i32 }).sum()
         };
 
+        // Sin aurora de referencia: de dia.
+        cielo.ajustar(0.0, 1.0, 130.0, &[], 1.0);
+        let dia_con = brillo(&cielo, &banda);
+        let mut sin = Cielo::generar();
+        sin.ajustar(0.0, 1.0, 130.0, &[], 0.0);
+        assert_eq!(dia_con, brillo(&sin, &banda), "de dia no hay aurora");
+
         cielo.ajustar(0.0, 0.0, 130.0, &[], 0.0);
-        let (bajo_sin, alto_sin) = (brillo(&cielo, &banda), brillo(&cielo, &alto));
-
+        let noche = brillo(&cielo, &banda);
+        let cenit_noche = brillo(&cielo, &cenit);
+        let mut apagado = Cielo::generar();
+        apagado.ajustar(0.0, 0.0, 130.0, &[], 0.0);
+        apagado.amanecer = 1.0;
         cielo.ajustar(0.0, 0.0, 130.0, &[], 1.0);
-        let (bajo_con, alto_con) = (brillo(&cielo, &banda), brillo(&cielo, &alto));
+        let voces = brillo(&cielo, &banda);
+        assert!(voces > noche + 3000, "las voces no la encienden: {noche} -> {voces}");
+        assert_eq!(brillo(&cielo, &cenit), cenit_noche, "la aurora llego al cenit");
 
-        assert!(
-            bajo_con > bajo_sin + 3000,
-            "la aurora no enciende el horizonte: {bajo_sin} -> {bajo_con}"
-        );
-        assert_eq!(alto_con, alto_sin, "la aurora llego al cenit, tiene que quedarse abajo");
-
-        // Y NO ES UN FILTRO DE COLOR: la cortina tiene lados. Mirando los
-        // 360 grados de la banda baja, el azimut mas encendido tiene que
-        // sacarle mucho al mas apagado.
         let por_azimut: Vec<i32> = banda
             .iter()
             .map(|d| { let c = cielo.color(d); c.r as i32 + c.g as i32 + c.b as i32 })
             .collect();
-        let (mas, menos) = (
-            *por_azimut.iter().max().unwrap(),
-            *por_azimut.iter().min().unwrap(),
-        );
+        let (mas, menos) = (*por_azimut.iter().max().unwrap(), *por_azimut.iter().min().unwrap());
         assert!(mas > menos * 2, "la aurora esta pareja en todo el cielo: {menos} a {mas}");
     }
 

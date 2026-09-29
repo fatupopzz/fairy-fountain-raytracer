@@ -44,8 +44,16 @@ impl RayIntersect for Sphere {
         let normal = normalize(&(point - self.center)); // apunta hacia afuera
 
         // Mapeo esferico: la normal se convierte en latitud/longitud.
-        let u = 0.5 + normal.z.atan2(normal.x) / (2.0 * PI);
-        let v = 0.5 - normal.y.asin() / PI;
+        // Las UV solo hacen falta si hay una imagen que leer: las hadas, el
+        // polvo y los cristales encendidos son de color liso, y el arco
+        // tangente y el arco seno de cada impacto eran tiempo tirado.
+        let (u, v) = match self.material.texture {
+            crate::texture::Texture::Solid(_) => (0.0, 0.0),
+            _ => (
+                0.5 + normal.z.atan2(normal.x) / (2.0 * PI),
+                0.5 - normal.y.asin() / PI,
+            ),
+        };
 
         Intersect::new(point, normal, distance, &self.material, u, v)
     }

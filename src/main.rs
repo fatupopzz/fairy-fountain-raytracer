@@ -4,7 +4,11 @@
 //! techo con el centro abierto, agua cyan que brilla desde abajo, molduras
 //! de oro, y en el medio del agua un pedestal de obsidiana con la Triforce
 //! rodeada de hadas: esferitas emisivas que la musica hace respirar. Todo
-//! adentro de una cueva oscura que apenas se ve. Lo que lo hace leerse
+//! arriba de una ISLA FLOTANTE sobre un mar de nubes (`isla.rs`), con
+//! cascadas que caen al vacio y cristales colgando de la panza. En el
+//! escalon de la entrada, LINK de Ocarina of Time, hecho de cubos, toca la
+//! ocarina (`link.rs`); Navi le da vueltas a la cabeza y de la ocarina
+//! salen notas con cada ataque del arpa (`navi.rs`). Lo que lo hace leerse
 //! como la fuente es la suma de cuatro cosas: el teal del marmol contra el
 //! rosa de las hadas, el agua espejo, niebla azul oscura, y bloom generoso
 //! que difunde todo lo que brilla.
@@ -63,9 +67,14 @@
 //!   - `audio.rs`      de donde sale el segundo en el que estamos;
 //!   - `sync.rs`       como tiene que estar la escena en ese segundo;
 //!   - `animacion.rs`  escribir eso sobre las hadas, el agua y las luces;
-//!   - `cielo.rs`      el skybox;
+//!   - `link.rs`       Link, con su esqueleto y su pose segun la cancion;
+//!   - `navi.rs`       Navi y las notas de la ocarina;
+//!   - `isla.rs`       la isla flotante, las cascadas y los islotes;
+//!   - `cielo.rs`      el skybox: estrellas, luna, aurora y mar de nubes;
 //!   - `bvh.rs`        el arbol que evita probar todos los objetos;
-//!   - `cube.rs`       los cuboides de la fuente, la cueva y los cristales;
+//!   - `cube.rs`       los cuboides de la fuente, la isla y los cristales;
+//!                     `caja_orientada.rs` los cubos que se pueden girar
+//!                     (de eso esta hecho Link);
 //!                     `cylinder.rs` las columnas, `plane.rs` el agua,
 //!                     `sphere.rs` las hadas, `triangle.rs` la Triforce y
 //!                     las puntas de los cristales, y `toro.rs` los anillos
@@ -83,7 +92,10 @@
 //!   - `--taa`         banco de pruebas del antialiasing temporal: vuelca
 //!                     el cuadro crudo, el acumulado y la referencia 2x2
 //!                     del mismo instante, con la camara en movimiento;
-//!   - `--sync [paso]` imprime lo que el analisis pide, segundo a segundo.
+//!   - `--sync [paso]` imprime lo que el analisis pide, segundo a segundo;
+//!   - `--video <mp4>` graba el tema entero (o un tramo) a 30 cuadros por
+//!                     segundo, con el doble de resolucion y cuatro muestras
+//!                     por pixel, y lo junta con la musica usando ffmpeg.
 //!
 //! EL POST-PROCESADO NO CORRE EN LA CPU. El trazador produce color y
 //! profundidad y nada mas; el bloom, la niebla, la vinieta, el tinte y la
@@ -98,13 +110,17 @@ mod animacion;
 mod audio;
 mod azar;
 mod bvh;
+mod caja_orientada;
 mod camera;
 mod cielo;
 mod cube;
 mod framebuffer;
+mod isla;
 mod grupo_acotado;
 mod light;
+mod link;
 mod material;
+mod navi;
 mod ray_intersect;
 mod sync;
 mod texture;
@@ -122,7 +138,7 @@ mod triangle;
 use animacion::EscenaViva;
 use audio::RelojEscena;
 use bvh::Bvh;
-use camera::Camera;
+use camera::{Camera, CAMPO_VISUAL};
 use cielo::Cielo;
 use cube::Cube;
 use cylinder::Cylinder;
@@ -295,6 +311,10 @@ impl Sombras {
 /// por debajo de eso la luz es literalmente invisible.
 const MIN_APORTE_LUZ: f32 = 0.004;
 
+/// Por debajo de que peso un rayo de rebote deja de calcular sombras. Ver
+/// el bucle de luces de `cast_ray`.
+const SOMBRA_REFLEJO_MIN: f32 = 0.35;
+
 /// La escala de las olas con la que se dibujan las causticas del fondo.
 ///
 /// Es la misma que la de la superficie (`ripple_scale` del plano del agua,
@@ -455,15 +475,15 @@ fn quad(a: Vec3, b: Vec3, c: Vec3, d: Vec3, material: &Material) -> [Triangle; 2
     [face(a, b, c), face(a, c, d)]
 }
 
-/// A que "profundidad" se anota el cielo en el depth buffer.
+/// A que "profundidad" se anota el cielo en el depth buffer: la maxima.
 ///
-/// El cielo esta infinitamente lejos, pero anotarlo asi (255 en el alpha) lo
-/// deja ahogado en niebla en cuanto la cancion sube la densidad, y las
-/// estrellas desaparecen justo cuando la escena mas las necesita. Con 22
-/// unidades queda apenas mas lejos que el borde de la cueva (que esta a
-/// unas 20 desde la camara): se vela como lo que esta al fondo, no como el
-/// infinito.
-const CIELO_PROFUNDIDAD: f32 = 22.0;
+/// Mientras la fuente estaba en una cueva se anotaba a 22 unidades, para que
+/// la niebla lo velara como al borde de roca. Ahora que la isla flota en el
+/// cielo abierto, la camara ve cosas mas lejos que eso (los islotes estan a
+/// veinte y pico), y el cielo tiene que quedar DETRAS de todo. La niebla no
+/// lo ahoga porque el composite lo reconoce por esta marca y lo deja casi
+/// limpio (ver `composite.fs`).
+const CIELO_PROFUNDIDAD: f32 = Framebuffer::PROFUNDIDAD_MAXIMA;
 
 /// Reflectancia de Fresnel por la aproximacion de Schlick.
 ///
@@ -761,6 +781,8 @@ fn cast_ray(
         );
     }
 
+    let mut acumulado = [lit.r as f32, lit.g as f32, lit.b as f32];
+    let base_f = [base_color.r as f32, base_color.g as f32, base_color.b as f32];
     for (numero_luz, light) in lights.iter().enumerate() {
         // CORTE TEMPRANO POR APORTE.
         //
@@ -870,6 +892,15 @@ fn cast_ray(
         // Es el truco de Haines y Greenberg de 1986, que sigue siendo la
         // mejor relacion entre lo que cuesta escribirlo y lo que ahorra.
         let mut shadow_factor = 1.0f32;
+        // LOS REFLEJOS DEBILES NO PREGUNTAN POR LA SOMBRA. Un rayo de rebote
+        // que llega al pixel con poco peso (el reflejo del piso pulido, el
+        // del marmol) ilumina su impacto sin tirar rayos de sombra: en un
+        // reflejo borroso y al 30% la sombra no se distingue, y esos rayos
+        // eran la quinta parte del cuadro (medido contando instrucciones:
+        // 54 contra 43 mil millones). Los rebotes fuertes, el agua mirada de
+        // costado y la obsidiana, la siguen calculando.
+        let sombra_barata = depth > 0 && peso < SOMBRA_REFLEJO_MIN;
+        if !sombra_barata {
         let recordado = sombras.luces.get(numero_luz).copied().unwrap_or(usize::MAX);
         let resuelto = recordado != usize::MAX
             && objects[recordado].transmision(&shadow_origin, &light_dir, shadow_distance) <= 0.0;
@@ -905,6 +936,7 @@ fn cast_ray(
         } else {
             shadow_factor = 0.0;
         }
+        }
 
         // En sombra se apagan difuso y especular de ESTA luz, pero NO se
         // corta la funcion: las otras luces siguen aportando, y reflexion
@@ -918,35 +950,49 @@ fn cast_ray(
         // la cueva entera pareja.
         let shadow_factor = shadow_factor * light.atenuacion(shadow_distance);
 
-        let reflect_dir = reflect(&-light_dir, &normal);
-
         // El difuso lleva el COLOR de la luz. Antes solo el especular lo
         // llevaba, y una luz rosa alumbraba la piedra en gris: la fuente
         // se leia cyan pareja por mas que las luces fueran rosas y
         // violetas. Ahora cada luz tine lo que toca, y donde se cruzan dos
         // de colores distintos el color se mezcla de verdad.
-        let diffuse = tint_color(
-            scale_color(
-                base_color,
-                intersect.material.albedo[0] * diffuse_intensity * light.intensity * shadow_factor,
-            ),
-            [
-                light.color.r as f32 / 255.0,
-                light.color.g as f32 / 255.0,
-                light.color.b as f32 / 255.0,
-            ],
-        );
+        //
+        // TODO EN FLOTANTE, y se pasa a 8 bits una sola vez al final. Antes
+        // cada aporte se recortaba a `u8` dos o tres veces por luz (escalar,
+        // tenir, sumar), y con diez luces por impacto esas conversiones eran
+        // la mitad de lo que costaba iluminar: medido contando
+        // instrucciones, el bucle de luces era el 40% del cuadro y las
+        // sombras apenas el 6%. De paso deja de tirarse la fraccion de nivel
+        // que cada luz perdia al truncarse.
+        let lc = [
+            light.color.r as f32 / 255.0,
+            light.color.g as f32 / 255.0,
+            light.color.b as f32 / 255.0,
+        ];
+        let k_difuso = intersect.material.albedo[0] * diffuse_intensity * light.intensity * shadow_factor;
+        acumulado[0] += base_f[0] * k_difuso * lc[0];
+        acumulado[1] += base_f[1] * k_difuso * lc[1];
+        acumulado[2] += base_f[2] * k_difuso * lc[2];
 
-        let specular_intensity = dot(&view_dir, &reflect_dir)
-            .max(0.0)
-            .powf(intersect.material.specular);
-        let specular = scale_color(
-            light.color,
-            intersect.material.albedo[1] * specular_intensity * light.intensity * shadow_factor,
-        );
-
-        lit = add_colors(lit, add_colors(diffuse, specular));
+        // El especular solo se calcula si puede llegar a verse: la potencia
+        // es lo mas caro de la cuenta y en la piedra mate no aporta nada.
+        let k_especular = intersect.material.albedo[1] * light.intensity * shadow_factor;
+        if k_especular > 0.002 {
+            let reflect_dir = reflect(&-light_dir, &normal);
+            let alineado = dot(&view_dir, &reflect_dir);
+            if alineado > 0.0 {
+                let k = alineado.powf(intersect.material.specular) * k_especular * 255.0;
+                acumulado[0] += lc[0] * k;
+                acumulado[1] += lc[1] * k;
+                acumulado[2] += lc[2] * k;
+            }
+        }
     }
+    let lit = Color::new(
+        acumulado[0].clamp(0.0, 255.0) as u8,
+        acumulado[1].clamp(0.0, 255.0) as u8,
+        acumulado[2].clamp(0.0, 255.0) as u8,
+        255,
+    );
 
     // --- REFLEXION ---
     // Se rebota el rayo sobre la normal y se vuelve a trazar.
@@ -1049,6 +1095,12 @@ fn cast_ray(
         Some(emission) => add_colors(shaded, emission),
         None => shaded,
     };
+    // Y la luz propia del PUNTO, si la tiene: los anillos del golpe en el
+    // agua (ver `Plane::ondas`).
+    let final_color = match intersect.brillo {
+        Some(brillo) => add_colors(final_color, brillo),
+        None => final_color,
+    };
 
     (final_color, zbuffer)
 }
@@ -1142,24 +1194,25 @@ fn render(
     }
 }
 
-/// LOS DOS ARBOLES. Se arman UNA vez y valen toda la corrida.
+/// Los dos arboles de la escena, con las cajas de ESTE cuadro.
 ///
-/// SE PROBO REARMARLOS EN CADA CUADRO Y NO SIRVE. Queda anotado para que no
-/// se reintente a ciegas, porque el argumento para hacerlo es bueno: lo que
-/// se mueve nace con una caja que cubre TODO su recorrido (la de cada grupo
-/// de estelas es una esfera de ocho unidades alrededor del centro de la
-/// escena), el arbol se queda con SU copia, y asi casi cualquier rayo que
-/// entra a la cueva "toca" a las estelas y tiene que bajar a preguntarles
-/// aunque no haya ninguna viva. Rearmar los dos arboles sale casi gratis
-/// —treinta y tres objetos, unas dos mil cuentas de area— y deja las cajas
-/// de AHORA.
+/// Se arman de nuevo en cada cuadro, despues de mover la escena. Antes se
+/// armaban una vez al arrancar, y todo lo que se mueve tenia que declarar
+/// una caja que cubriera su recorrido ENTERO: las estelas del arpa, que
+/// cruzan la fuente de punta a punta, llevaban cajas de dieciseis unidades
+/// de lado. El arbol no podia descartarlas nunca, y cualquier rayo que
+/// pasara cerca de la fuente las probaba a las tres. El perfilador lo dejo
+/// claro: recorrer el arbol era mas de la mitad del cuadro. Rearmarlo son
+/// un centenar de cajas, unos microsegundos, y cada grupo que se mueve ya
+/// ajusta su caja a donde quedo (`recalcular_caja`).
 ///
-/// Medido: 36.7, 38.9 y 37.1 ms contra 37.4, 37.7 y 38.1 sin rearmar, o sea
-/// exactamente nada. El motivo es que ese trabajo YA estaba hecho en otro
-/// lado: cada `GrupoAcotado` recalcula su propia caja en cada cuadro
-/// (`recalcular_caja`), asi que el rayo que entra a la caja gorda del arbol
-/// choca enseguida con la caja chica del grupo y se va. Lo que se ahorraba
-/// rearmando era un test de caja por grupo, no los hijos.
+/// Con la escena anterior (treinta y tres objetos, casi todos quietos) se
+/// habia probado y no cambiaba nada: el rayo que entraba a la caja gorda
+/// chocaba enseguida con la caja chica que cada grupo recalcula, y lo unico
+/// que se ahorraba era un test de caja por grupo. Con Link, Navi, las notas y
+/// cada hada suelta, lo que se mueve pasa a ser la mitad de la escena, y un
+/// arbol con la mitad de las hojas gordas deja de podar: medido contando
+/// instrucciones, rearmarlo baja el cuadro un 15%.
 fn arboles_de(objects: &[Box<dyn RayIntersect + Send + Sync>], occluders: &[usize]) -> (Bvh, Bvh) {
     let caja_de = |i: &usize| (*i, objects[*i].aabb());
     let todos: Vec<usize> = (0..objects.len()).collect();
@@ -1204,7 +1257,7 @@ fn render_rows(
     // en el centro, y acercar la camara lo suficiente para verla dejaba al
     // templete fuera de cuadro. Cerrar el lente agranda el sujeto sin tener
     // que meterse adentro del edificio.
-    let fov = std::f32::consts::PI / 4.0; // 45 grados
+    let fov = CAMPO_VISUAL;
     let scale = (fov / 2.0).tan();
 
     // Los tres ejes de la camara. Se sacan una vez por render, no por pixel.
@@ -1752,8 +1805,8 @@ impl PostGpu {
             let origen = Rectangle {
                 x: 0.0,
                 y: 0.0,
-                width: RENDER_W as f32,
-                height: RENDER_H as f32,
+                width: tex_rt.width() as f32,
+                height: tex_rt.height() as f32,
             };
             let destino = Rectangle {
                 x: 0.0,
@@ -1896,8 +1949,8 @@ impl PostGpu {
         let origen = Rectangle {
             x: 0.0,
             y: 0.0,
-            width: RENDER_W as f32,
-            height: RENDER_H as f32,
+            width: tex_rt.width() as f32,
+            height: tex_rt.height() as f32,
         };
         let destino = Rectangle {
             x: 0.0,
@@ -2236,7 +2289,7 @@ fn proyectar_a_pantalla(camera: &Camera, punto: Vec3) -> [f32; 2] {
     let (right, up, forward) = camera.basis();
     let d = punto - camera.position;
 
-    let fov = PI / 4.0;
+    let fov = CAMPO_VISUAL;
     let scale = (fov / 2.0).tan();
     let aspect = WIDTH as f32 / HEIGHT as f32;
 
@@ -2262,199 +2315,186 @@ fn mirar_a(ojo: Vec3, mira: Vec3) -> Camera {
     Camera::new(ojo, yaw, pitch)
 }
 
-/// La camara orbital: siempre mirando a `CAMARA_MIRA`, parada a `radio` de
-/// distancia, con `theta` girando alrededor y `phi` de altura.
+/// Un PLANO del programa de camara: en que segundo de la cancion, a que
+/// distancia, a que altura (angulo sobre el horizonte) y a que altura mira.
+struct Plano {
+    t: f32,
+    radio: f32,
+    phi: f32,
+    mira_y: f32,
+    /// A quien se mira: 0 es la fuente, 1 es Link. En los planos de Link la
+    /// orbita se centra en su cabeza, y el radio es la distancia a el.
+    link: f32,
+}
+
+/// La cabeza de Link en reposo: el centro de los planos cercanos.
+const LINK_CABEZA: Vec3 = Vec3::new(link::PIES.x, link::PIES.y + 1.5, link::PIES.z);
+
+/// EL PROGRAMA DE CAMARA: la cancion elige el plano.
 ///
-/// NO da la vuelta entera: la fuente se mira de frente, y una orbita
-/// completa la veria desde adentro de la pared del fondo. Es un PENDULO.
-/// Sola, la camara oscila con un seno a los costados (y otro, mucho mas
-/// chico, en altura), asi que desacelera suavemente en los extremos en vez
-/// de rebotar; y las teclas se le SUMAN como un corrimiento manual. Los
-/// dos juntos se topan en `THETA_MAX`: en el extremo el ojo queda en x =
-/// 11 cos(0.25) sin(0.75) = 7.3, z = 11 cos(0.25) cos(0.75) = 7.8, siempre
-/// delante de la fuente y lejos de la pared del fondo (z = -11).
+/// El tema empieza al alba con el arpa sola, y la camara abre LEJOS y ALTA:
+/// un plano general de la isla flotando sobre las nubes, que es lo que
+/// cuenta donde estamos. A medida que la musica crece la camara baja y se
+/// acerca, hasta quedar a la altura de la fuente. Sobre el climax (las
+/// voces, del 124 al 148) se va a un CONTRAPICADO casi a ras de la plaza,
+/// mirando hacia arriba: la fuente se recorta contra la aurora, que en ese
+/// tramo esta a pleno. Despues vuelve a abrirse con la coda, y el ultimo
+/// plano es el primero, asi que el loop no salta.
+///
+/// Entre plano y plano se interpola con Catmull-Rom: la camara no frena en
+/// cada punto como con una rampa lineal, pasa por ellos con velocidad.
+///
+/// DOS PLANOS SON DE LINK, y caen donde caen por la vuelta de la camara: la
+/// orbita da una vuelta cada 96 segundos, asi que en el segundo 48 la
+/// camara esta del lado de la piscina (Link la mira de frente: se le ve la
+/// cara y la ocarina, con el cielo detras) y en el 96 esta del lado de la
+/// entrada (por encima del hombro, con la fuente delante de el). El programa
+/// no pelea contra la vuelta: la aprovecha.
+const PROGRAMA: [Plano; 15] = [
+    Plano { t: 0.0, radio: 20.0, phi: 0.34, mira_y: -0.2, link: 0.0 },
+    Plano { t: 22.0, radio: 18.0, phi: 0.27, mira_y: 0.4, link: 0.0 },
+    Plano { t: 37.0, radio: 14.0, phi: 0.20, mira_y: 1.2, link: 0.0 },
+    Plano { t: 45.0, radio: 3.4, phi: 0.10, mira_y: 0.0, link: 1.0 },
+    Plano { t: 51.0, radio: 3.1, phi: 0.14, mira_y: 0.0, link: 1.0 },
+    Plano { t: 62.0, radio: 13.0, phi: 0.15, mira_y: 1.8, link: 0.0 },
+    Plano { t: 83.0, radio: 12.0, phi: 0.12, mira_y: 2.1, link: 0.0 },
+    Plano { t: 93.0, radio: 3.6, phi: 0.24, mira_y: 0.0, link: 1.0 },
+    Plano { t: 102.0, radio: 4.3, phi: 0.18, mira_y: 0.0, link: 1.0 },
+    Plano { t: 112.0, radio: 12.5, phi: 0.10, mira_y: 2.4, link: 0.0 },
+    Plano { t: 124.0, radio: 13.5, phi: 0.08, mira_y: 3.0, link: 0.0 },
+    Plano { t: 146.0, radio: 13.0, phi: 0.07, mira_y: 3.2, link: 0.0 },
+    Plano { t: 158.0, radio: 11.5, phi: 0.14, mira_y: 2.2, link: 0.0 },
+    Plano { t: 172.0, radio: 16.0, phi: 0.25, mira_y: 0.8, link: 0.0 },
+    Plano { t: 183.3, radio: 20.0, phi: 0.34, mira_y: -0.2, link: 0.0 },
+];
+
+/// El plano del programa en el segundo `t` (radio, phi, mira_y, link).
+fn plano_en(t: f32) -> (f32, f32, f32, f32) {
+    let n = PROGRAMA.len();
+    let t = t.rem_euclid(PROGRAMA[n - 1].t);
+    let i = PROGRAMA.iter().rposition(|p| p.t <= t).unwrap_or(0).min(n - 2);
+    let (a, b) = (&PROGRAMA[i], &PROGRAMA[i + 1]);
+    let x = ((t - a.t) / (b.t - a.t)).clamp(0.0, 1.0);
+    let antes = &PROGRAMA[i.saturating_sub(1)];
+    let despues = &PROGRAMA[(i + 2).min(n - 1)];
+    let cr = |p0: f32, p1: f32, p2: f32, p3: f32| {
+        let (x2, x3) = (x * x, x * x * x);
+        0.5 * (2.0 * p1 + (p2 - p0) * x + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * x2
+            + (3.0 * p1 - p0 - 3.0 * p2 + p3) * x3)
+    };
+    (
+        cr(antes.radio, a.radio, b.radio, despues.radio),
+        cr(antes.phi, a.phi, b.phi, despues.phi),
+        cr(antes.mira_y, a.mira_y, b.mira_y, despues.mira_y),
+        // A quien se mira no se interpola con Catmull-Rom: se pasaria de 0
+        // a 1 y volveria, y la camara cabecearia. Va con una S.
+        a.link + (b.link - a.link) * x * x * (3.0 - 2.0 * x),
+    )
+}
+
+/// La camara orbital: da VUELTAS alrededor de la isla, mirando al centro.
+///
+/// En la cueva era un pendulo, porque una vuelta entera la metia adentro de
+/// la pared del fondo. La isla flota en el cielo y se puede mirar desde
+/// cualquier lado, asi que ahora gira entera, despacio: una vuelta cada
+/// `VUELTA` segundos, que es la ROTACION DEL DIORAMA. La distancia, la altura
+/// y a donde mira las pone el programa de la cancion (`plano_en`), y las
+/// teclas y el mouse se le SUMAN: girar, subir y acercar son corrimientos
+/// sobre el plano, no lo reemplazan.
 struct Orbita {
-    /// Segundos acumulados, la fase de los dos pendulos.
+    /// Segundos acumulados: la fase de la vuelta.
     timer: f32,
     /// Lo que sumaron las teclas al angulo horizontal, en radianes.
     theta_manual: f32,
     /// Lo que sumaron las teclas al angulo vertical, en radianes.
     phi_manual: f32,
-    /// Distancia al punto de mira. Topada para no acercarse hasta adentro
-    /// de los cristales ni alejarse hasta salir por la boca.
+    /// Lo que sumaron las teclas a la distancia.
     radio: f32,
 }
 
 impl Orbita {
-    /// Tope del angulo horizontal TOTAL (pendulo + teclas), a cada lado.
-    const THETA_MAX: f32 = 0.75;
-    /// Amplitud y periodo del pendulo horizontal.
-    ///
-    /// BAJADA de 0.65 a 0.36 radianes (de 37 a 21 grados) por una razon de
-    /// encuadre, no de gusto. Las seis columnas estan en 0, 60, 120... y
-    /// el eje de la camara apunta a 90 menos theta, asi que con el
-    /// pendulo viejo el eje barria de 53 a 127 grados y se paraba encima
-    /// de la columna de 60 y de la de 120 en cada extremo de la
-    /// oscilacion: dos veces por ciclo, durante varios segundos, habia una
-    /// columna JUSTO en el centro del cuadro tapando el altar. Se ve en
-    /// cualquier foto vieja del segundo 87 o del 160.
-    ///
-    /// Con 0.36 el eje se queda entre 69 y 111 grados, o sea siempre
-    /// dentro del hueco de 60 a 120, y las dos columnas de adelante pasan
-    /// a hacer de MARCO a los costados en vez de tapar. Es mejor toma y
-    /// ademas mas parecida a la original, donde a la fuente se la mira
-    /// desde la boca de la cueva y no dando vueltas alrededor.
-    const THETA_AMPLITUD: f32 = 0.36;
-    const THETA_PERIODO: f32 = 34.0;
-    /// El angulo vertical de reposo y su vaiven: entre 0.20 y 0.30, apenas
-    /// perceptible, cada 18 segundos. Con un periodo distinto del
-    /// horizontal el recorrido no se repite igual en cada ida y vuelta.
-    /// Bajo a proposito: con 0.25 el ojo queda en y = 4.7, por DEBAJO de
-    /// la linea del techo (5.0), asi que la fuente se mira por adentro,
-    /// entre las columnas, y no desde arriba de las losas.
-    const PHI_BASE: f32 = 0.25;
-    const PHI_AMPLITUD: f32 = 0.05;
-    const PHI_PERIODO: f32 = 23.0;
-    /// Topes del angulo vertical total: ni desde abajo del piso ni desde
+    /// Segundos por vuelta completa.
+    const VUELTA: f32 = 96.0;
+    /// Desde donde arranca la vuelta: de frente, con Link y la entrada del
+    /// lado de la camara.
+    const THETA_INICIAL: f32 = 0.35;
+    /// Topes del angulo vertical total: ni por debajo de la plaza ni desde
     /// la vertical, donde la camara se da vuelta.
-    const PHI_MIN: f32 = 0.1;
+    const PHI_MIN: f32 = 0.0;
     const PHI_MAX: f32 = 1.2;
-    /// La distancia con la que arranca la camara.
-    ///
-    /// 10.7 y no 11.0: ver el comentario de `inicial`.
-    const RADIO_INICIAL: f32 = 10.7;
-    const RADIO_MIN: f32 = 5.0;
-    const RADIO_MAX: f32 = 12.0;
-    /// La camara RESPIRA: el radio oscila +/- 1.2 cada 41 segundos, un
-    /// dolly lentisimo que acerca y aleja la fuente. Con un periodo que no
-    /// divide a los otros dos, el recorrido no se repite nunca igual.
-    const RADIO_AMPLITUD: f32 = 1.2;
+    /// Topes del corrimiento manual de la distancia, y de la distancia
+    /// total: ni adentro de las columnas ni tan lejos que la isla se pierda.
+    const RADIO_MANUAL: f32 = 9.0;
+    const RADIO_MIN: f32 = 6.0;
+    const RADIO_MAX: f32 = 28.0;
+    /// La camara respira: un dolly lento de +/- 0.6 cada 41 segundos,
+    /// encima del programa.
+    const RADIO_AMPLITUD: f32 = 0.6;
     const RADIO_PERIODO: f32 = 41.0;
-    /// Cuanto se acerca la camara entre el principio y el final del tema.
-    const CINE_ACERCAMIENTO: f32 = 1.5;
-    // LA CAMARA YA NO SE EMPUJA CON EL GOLPE.
-    //
-    // Habia un `PULSO_EMPUJE` que la adelantaba unos centimetros en cada
-    // tiempo fuerte, con la idea de que el golpe se sintiera en el cuerpo.
-    // Se saco: el tema es una nana, la escena es un lugar en calma, y una
-    // camara que da un tironcito cada medio segundo no acompana ese clima
-    // sino que pone al que mira en tension. Lo que tiene que latir es la
-    // LUZ, no el punto de vista.
-    //
-    // El pulso sigue moviendo el bloom, las luces de la fuente, las hadas
-    // y los haces de luz. Eso se siente y no inquieta, porque son cosas
-    // que estan pasando adentro de la cueva y no sacudidas del encuadre.
 
-    /// De frente, apenas elevada (~14 grados) y a 11 de distancia: el ojo
-    /// queda en (0, 4.7, 10.7), bajo el techo, con la fuente en cuadro.
     fn inicial() -> Self {
-        Orbita {
-            timer: 0.0,
-            theta_manual: 0.0,
-            phi_manual: 0.0,
-            // 10.7 y no 11.0: la respiracion del radio es de +/- 1.2 y el
-            // tope de arriba esta en 12. Arrancando en 11, la suma llegaba
-            // a 12.2 y se topaba, asi que durante un 22% de cada ciclo de
-            // cuarenta y un segundos el dolly se FRENABA EN SECO contra el
-            // limite y despues arrancaba de nuevo. Eso no se lee como una
-            // camara que respira sino como una que se traba: es la otra
-            // mitad de lo que se reportaba como composicion abrupta.
-            //
-            // Con 10.7 el recorrido entero (9.5 a 11.9) cabe adentro del
-            // rango y la respiracion nunca toca el tope. El encuadre queda
-            // un 3% mas cerca, que no se nota.
-            radio: Self::RADIO_INICIAL,
-        }
+        Orbita { timer: 0.0, theta_manual: 0.0, phi_manual: 0.0, radio: 0.0 }
     }
 
-    /// Donde esta el pendulo horizontal en este instante.
-    fn theta_auto(&self) -> f32 {
-        (self.timer * 2.0 * PI / Self::THETA_PERIODO).sin() * Self::THETA_AMPLITUD
+    fn theta(&self) -> f32 {
+        Self::THETA_INICIAL + self.timer * 2.0 * PI / Self::VUELTA + self.theta_manual
     }
 
-    /// Y el vertical.
-    fn phi_auto(&self) -> f32 {
-        Self::PHI_BASE + (self.timer * 2.0 * PI / Self::PHI_PERIODO).sin() * Self::PHI_AMPLITUD
-    }
-
-    /// La respiracion del radio en este instante.
     fn radio_auto(&self) -> f32 {
         (self.timer * 2.0 * PI / Self::RADIO_PERIODO).sin() * Self::RADIO_AMPLITUD
     }
 
-    /// Distancia total al punto de mira: la manual mas la respiracion,
-    /// topada.
-    fn distancia(&self) -> f32 {
-        (self.radio + self.radio_auto()).clamp(Self::RADIO_MIN, Self::RADIO_MAX)
-    }
-
-    /// Angulo horizontal total, topado.
-    fn theta(&self) -> f32 {
-        (self.theta_auto() + self.theta_manual).clamp(-Self::THETA_MAX, Self::THETA_MAX)
-    }
-
-    /// Angulo vertical total, topado.
-    fn phi(&self) -> f32 {
-        (self.phi_auto() + self.phi_manual).clamp(Self::PHI_MIN, Self::PHI_MAX)
-    }
-
-    /// Avanza el pendulo `dt` segundos y suma lo que pidieron las teclas.
-    ///
-    /// El corrimiento manual se topa contra el mismo limite que el total:
-    /// si no, manteniendo una flecha apretada contra el tope el
-    /// corrimiento seguiria creciendo sin que se vea nada, y despues habria
-    /// que apretar la otra el mismo tiempo antes de que la camara volviera
-    /// a moverse.
+    /// Avanza la vuelta `dt` segundos y suma lo que pidieron las teclas.
     fn avanzar(&mut self, dt: f32, d_theta: f32, d_phi: f32, d_radio: f32) {
         self.timer += dt;
-
-        let auto = self.theta_auto();
-        self.theta_manual =
-            (self.theta_manual + d_theta).clamp(-Self::THETA_MAX - auto, Self::THETA_MAX - auto);
-
-        let auto = self.phi_auto();
-        self.phi_manual =
-            (self.phi_manual + d_phi).clamp(Self::PHI_MIN - auto, Self::PHI_MAX - auto);
-
-        self.radio = (self.radio + d_radio).clamp(Self::RADIO_MIN, Self::RADIO_MAX);
+        self.theta_manual += d_theta;
+        self.phi_manual = (self.phi_manual + d_phi).clamp(-Self::PHI_MAX, Self::PHI_MAX);
+        self.radio = (self.radio + d_radio).clamp(-Self::RADIO_MANUAL, Self::RADIO_MANUAL);
     }
 
-    /// A que distancia esta el centro de la fuente, SIN contar el empujon
-    /// del beat: es la distancia a la que hay que enfocar.
-    fn distancia_de_foco(&self, cine: f32) -> f32 {
-        (self.distancia() - Self::CINE_ACERCAMIENTO * cine)
-            .clamp(Self::RADIO_MIN, Self::RADIO_MAX)
+    /// La distancia, la altura, a donde mira y cuanto mira a Link en este
+    /// instante: el programa, la respiracion y lo manual.
+    fn encuadre(&self, tiempo: f32) -> (f32, f32, f32, f32) {
+        let (radio, phi, mira_y, link) = plano_en(tiempo);
+        // La respiracion y lo manual se achican en los planos de Link: medio
+        // metro de dolly a tres metros de el es un salto, no un respiro.
+        let escala = 1.0 - link * 0.8;
+        (
+            (radio + (self.radio_auto() + self.radio) * escala).clamp(Self::RADIO_MIN * escala + 2.5 * link, Self::RADIO_MAX),
+            (phi + self.phi_manual).clamp(Self::PHI_MIN, Self::PHI_MAX),
+            mira_y,
+            link,
+        )
     }
 
-    /// La camara de este cuadro, mirando a la altura `mira_y`.
-    ///
-    /// `cine` (de 0 a 1) la ACERCA hasta `CINE_ACERCAMIENTO` unidades: al
-    /// final del tema la fuente llena mas el cuadro. Va aca y no sumado a
-    /// `radio` para que no se acumule con las teclas: es un corrimiento
-    /// del encuadre, no algo que el usuario este pidiendo.
-    ///
-    fn camara_cine(&self, mira_y: f32, cine: f32) -> Camera {
-        let (theta, phi) = (self.theta(), self.phi());
-        let radio = (self.distancia() - Self::CINE_ACERCAMIENTO * cine)
-            .clamp(Self::RADIO_MIN, Self::RADIO_MAX);
+    /// A que distancia esta lo que se mira: la distancia de foco.
+    fn distancia_de_foco(&self, p: &SceneParams) -> f32 {
+        self.encuadre(p.tiempo).0
+    }
+
+    /// La camara de este cuadro. `camera_target_y` de la cancion se suma
+    /// como un cabeceo fino alrededor de la altura del plano.
+    fn camara_cine(&self, p: &SceneParams) -> Camera {
+        let (radio, phi, mira_y, link) = self.encuadre(p.tiempo);
+        let fuente = Vec3::new(CAMARA_MIRA.x, mira_y + (p.camera_target_y - 2.0) * 0.5, CAMARA_MIRA.z);
+        let centro = CAMARA_MIRA + (LINK_CABEZA - CAMARA_MIRA) * link;
+        let mira = fuente + (LINK_CABEZA - fuente) * link;
+        self.alrededor(centro, radio, phi, mira)
+    }
+
+    fn alrededor(&self, centro: Vec3, radio: f32, phi: f32, mira: Vec3) -> Camera {
+        let theta = self.theta();
         let ojo = Vec3::new(
-            CAMARA_MIRA.x + radio * phi.cos() * theta.sin(),
-            CAMARA_MIRA.y + radio * phi.sin(),
-            CAMARA_MIRA.z + radio * phi.cos() * theta.cos(),
+            centro.x + radio * phi.cos() * theta.sin(),
+            centro.y + radio * phi.sin(),
+            centro.z + radio * phi.cos() * theta.cos(),
         );
-        mirar_a(ojo, Vec3::new(CAMARA_MIRA.x, mira_y, CAMARA_MIRA.z))
+        mirar_a(ojo, mira)
     }
 
-    /// La camara de este cuadro, mirando a la altura `mira_y`.
-    fn camara(&self, mira_y: f32) -> Camera {
-        let (theta, phi) = (self.theta(), self.phi());
-        let radio = self.distancia();
-        let ojo = Vec3::new(
-            CAMARA_MIRA.x + radio * phi.cos() * theta.sin(),
-            CAMARA_MIRA.y + radio * phi.sin(),
-            CAMARA_MIRA.z + radio * phi.cos() * theta.cos(),
-        );
-        mirar_a(ojo, Vec3::new(CAMARA_MIRA.x, mira_y, CAMARA_MIRA.z))
+    #[cfg(test)]
+    fn desde(&self, radio: f32, phi: f32, mira_y: f32) -> Camera {
+        self.alrededor(CAMARA_MIRA, radio, phi, Vec3::new(CAMARA_MIRA.x, mira_y, CAMARA_MIRA.z))
     }
 }
 
@@ -2555,6 +2595,7 @@ fn avanzar_noche(cielo: &mut Cielo, lights: &mut [Light], p: &SceneParams) {
     // `Cielo` solo sabe de resplandor del horizonte, y cuanto resplandor
     // hay es exactamente cuanta luz de dia hay.
     cielo.ajustar(p.giro_cielo, p.luz_del_dia, p.tiempo, &p.estrellas, p.swell);
+    cielo.musica(p.pulso);
 
     if let Some(luna) = lights.get_mut(LUZ_LUNA) {
         luna.position = cielo.luna() * 40.0;
@@ -2578,6 +2619,72 @@ fn avanzar_noche(cielo: &mut Cielo, lights: &mut [Light], p: &SceneParams) {
         if let Some(antorcha) = lights.get_mut(i) {
             let ruido = llama(p.tiempo * 3.3 + n as f32 * 11.0, 7 + n as u32 * 31);
             antorcha.intensity = 2.4 * (0.72 + ruido * 0.38 + p.pulso * 0.12);
+        }
+    }
+}
+
+/// El estado del modo `--video`. Ver el comentario en `main`.
+struct Video {
+    salida: String,
+    desde: f32,
+    hasta: f32,
+    muestras: u32,
+    cuadro: u32,
+    ffmpeg: Option<std::process::Child>,
+}
+
+impl Video {
+    const FPS: f32 = 30.0;
+
+    fn tiempo(&self) -> f32 {
+        self.desde + self.cuadro as f32 / Self::FPS
+    }
+
+    /// Le pasa a ffmpeg un cuadro de la pantalla. La primera vez lo
+    /// arranca, porque recien ahi se sabe el tamano real de la ventana (en
+    /// una pantalla retina es el doble del pedido).
+    fn entregar(&mut self, ancho: i32, alto: i32, pixeles: &[Color]) {
+        if self.ffmpeg.is_none() {
+            let duracion = self.hasta - self.desde;
+            // La primera de las rutas de la musica que exista.
+            let musica = AUDIO_PATHS
+                .iter()
+                .copied()
+                .find(|r| std::path::Path::new(r).exists())
+                .unwrap_or(AUDIO_PATHS[0]);
+            let hijo = std::process::Command::new("ffmpeg")
+                .args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgba"])
+                .args(["-s", &format!("{ancho}x{alto}"), "-r", "30", "-i", "-"])
+                .args(["-ss", &format!("{}", self.desde), "-i", musica])
+                .args(["-t", &format!("{duracion}"), "-map", "0:v", "-map", "1:a?"])
+                .args(["-vf", "scale=1280:960:flags=lanczos"])
+                .args(["-c:v", "libx264", "-preset", "slow", "-crf", "23", "-pix_fmt", "yuv420p"])
+                .args(["-c:a", "aac", "-b:a", "192k", &self.salida])
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .expect("no se pudo arrancar ffmpeg (hace falta tenerlo instalado para --video)");
+            self.ffmpeg = Some(hijo);
+        }
+        let mut bytes = Vec::with_capacity(pixeles.len() * 4);
+        for c in pixeles {
+            bytes.extend_from_slice(&[c.r, c.g, c.b, 255]);
+        }
+        if let Some(stdin) = self.ffmpeg.as_mut().and_then(|h| h.stdin.as_mut()) {
+            use std::io::Write;
+            let _ = stdin.write_all(&bytes);
+        }
+        self.cuadro += 1;
+    }
+}
+
+impl Drop for Video {
+    /// Cerrar el tubo es lo que le dice a ffmpeg que no vienen mas cuadros;
+    /// despues se lo espera para que termine de escribir el archivo.
+    fn drop(&mut self) {
+        if let Some(mut hijo) = self.ffmpeg.take() {
+            drop(hijo.stdin.take());
+            let _ = hijo.wait();
+            println!("video guardado: {}", self.salida);
         }
     }
 }
@@ -2667,46 +2774,6 @@ fn main() {
     .con_relieve(relieve_marmol.clone(), 1.0)
     .con_rugosidad(0.10);
 
-    // El marmol de la estela del fondo: el mismo, SIN reflexion.
-    //
-    // No es una decision de estilo, es de costo: la estela es una
-    // superficie grande y lejana, y con el peso de reflexion del marmol
-    // (0.1, que Fresnel sube mas todavia a angulo rasante) cada uno de
-    // sus pixeles disparaba un rayo de rebote. Se midio: pasaba el cuadro
-    // de 44 a 50 milisegundos para devolver un reflejo del cielo que a esa
-    // distancia y detras de la niebla no se ve. El brillo especular se
-    // queda, que es lo que hace que la piedra se lea pulida.
-    // OSCURECIDO, y es una correccion de composicion, no de material.
-    //
-    // La estela es una losa de cuatro por seis puesta detras del altar: es
-    // el TELON DE FONDO del sujeto. Con el tinte de antes (0.62, 0.55,
-    // 0.60) y albedo pleno era la superficie grande MAS CLARA del cuadro,
-    // mas que las columnas que estan al doble de cerca, y eso rompia dos
-    // cosas a la vez.
-    //
-    // La primera es de lectura: la Triforce del altar tiene que recortarse
-    // CONTRA la estela, y un sujeto claro sobre un fondo igual de claro no
-    // se recorta contra nada.
-    //
-    // La segunda es que reventaba el bloom. El umbral del bloom mira la
-    // luminancia pixel por pixel, no le importa que sea un objeto grande y
-    // plano: la estela entera lo cruzaba, y cuatro por seis unidades de
-    // superficie encendida entran a la cadena de mips como una MANCHA, no
-    // como un punto de luz. Al subir la cadena esa mancha se convertia en
-    // un globo blanco de medio cuadro justo detras de la Triforce, que es
-    // el peor lugar posible. Se veia en cualquier captura del climax.
-    //
-    // Un halo bonito sale de algo CHICO y muy brillante. De algo grande y
-    // medianamente brillante sale niebla.
-    let marmol_mate = Material::new(
-        [0.72, 0.30, 0.0, 0.0],
-        30.0,
-        0.0,
-        Texture::ImageTexture(cargar("fairy_marble.png"), color_f(0.32, 0.29, 0.36), (0.0, 0.0)),
-        None,
-    )
-    .con_relieve(relieve_marmol.clone(), 1.0);
-
     // El fondo de la piscina: teal profundo y mate, sin brillo.
     let marmol_fondo = Material::new(
         [0.8, 0.05, 0.0, 0.0],
@@ -2787,18 +2854,6 @@ fn main() {
         0.0,
         Texture::Solid(color_f(0.85, 0.7, 0.2)),
         Some(color_f(0.7, 0.55, 0.15)),
-    );
-
-    // El oro del emblema del muro: el mismo, mas apagado y con brillo
-    // propio mas bajo. Esta a diez unidades de la camara y detras de la
-    // niebla; con el oro de las molduras competia con la Triforce del
-    // altar, que es la que tiene que ganar.
-    let oro_muro = Material::new(
-        [0.9, 0.5, 0.12, 0.0],
-        90.0,
-        0.0,
-        Texture::Solid(color_f(0.62, 0.50, 0.20)),
-        Some(color_f(0.20, 0.16, 0.05)),
     );
 
     // --- 5. OBSIDIANA ---
@@ -2910,8 +2965,8 @@ fn main() {
     // camara. Es la Great Fairy Fountain de Ocarina of Time: una piscina
     // cuadrada de marmol teal con seis columnas alrededor, un techo con el
     // centro abierto, molduras de oro, y en el medio del agua un pedestal
-    // de obsidiana con la Triforce, rodeada de hadas. Todo adentro de una
-    // cueva oscura que apenas se ve.
+    // de obsidiana con la Triforce, rodeada de hadas. Todo arriba de una
+    // isla que flota sobre las nubes.
     //
     // Casi todo son cuboides (`Cube::new_rect`); las columnas son
     // cilindros, el agua un plano recortado, las hadas esferas y la
@@ -2960,40 +3015,11 @@ fn main() {
         Box::new(Cube::new(Vec3::new(x, y, z), lado, material.clone()))
     }
 
-    // --- 1. LA CUEVA ---
-    // Un piso enorme y tres paredes bajas de piedra oscura (fondo y
-    // costados), con mosaico para que la piedra se lea como piedra y no
-    // como una mancha estirada 30 unidades. Van sueltos: son cuatro
-    // cuboides y los prueba todo rayo de todos modos.
-    //
-    // La pared del fondo es BAJA a proposito (llega a y = 3.2): la fuente
-    // esta en la boca de la cueva, abierta al cielo, y por encima del
-    // borde de roca se ve la noche, la nebulosa y la luna. Con la pared
-    // hasta el techo el skybox no aparecia en ningun cuadro.
-    let roca = |x: f32, y: f32, z: f32, sx: f32, sy: f32, sz: f32| {
-        Box::new(Cube::new_rect(Vec3::new(x, y, z), sx, sy, sz, piedra.clone()).con_mosaico(0.22))
-    };
-    objects.push(roca(0.0, -1.0, 0.0, 30.0, 1.0, 30.0));
-    // La pared del fondo y, contra ella, LA ESTELA: una losa alta con el
-    // emblema grabado. Van juntas en un grupo porque la pared ya mide
-    // treinta unidades y su esfera acotante cubre a la estela sin
-    // crecer, asi que agruparlas sale gratis y deja la lista de los que
-    // pueden tapar la luz del mismo largo (ver el comentario de la
-    // entrada sobre por que eso importa).
-    objects.push(Box::new(GrupoAcotado::new(vec![
-        roca(0.0, 1.1, -12.0, 30.0, 4.2, 2.0),
-        // La estela sobresale POR ENCIMA del muro (que llega a 3.2) a
-        // proposito: asi su mitad de arriba, que es donde esta el
-        // emblema, se recorta contra el cielo en vez de perderse contra
-        // la roca negra. Y es de marmol y no de piedra de cueva, para que
-        // se lea como algo puesto ahi por alguien.
-        Box::new(
-            Cube::new_rect(Vec3::new(0.0, 2.0, -10.6), 4.2, 6.2, 0.6, marmol_mate.clone())
-                .con_mosaico(0.35),
-        ),
-    ])));
-    objects.push(roca(-14.0, 0.8, 0.0, 2.0, 3.6, 30.0));
-    objects.push(roca(14.0, 0.8, 0.0, 2.0, 3.6, 30.0));
+    // --- 1. LA ISLA ---
+    // La fuente flota en el cielo: el piso y las paredes de la cueva se
+    // cambiaron por una isla de pasto, tierra y roca con cascadas y
+    // cristales colgando. Ver `isla.rs`.
+    let isla = isla::armar(&mut objects, &piedra, &agua);
 
     // La plaza: una losa de marmol pulido alrededor de la piscina, con las
     // baldosas repitiendo cada dos unidades. Es el espejo en el que se
@@ -3065,9 +3091,13 @@ fn main() {
         uv_scale: 1.25,
         limite: Some(Limite::Rectangulo(PISCINA - 0.3, PISCINA - 0.3)),
         material: agua.clone(),
+        ondas: Vec::new(),
+        // Rosa de hada: sobre el cyan del agua es el color que mas se
+        // separa, y en blanco se leia como espuma.
+        onda_color: (1.0, 0.45, 0.88),
     }));
     escena.registrar_agua(objects.len(), piscina.len() - 1, agua.emission_color);
-    objects.push(Box::new(GrupoAcotado::new(piscina)));
+    objects.push(Box::new(GrupoAcotado::estatico(piscina)));
 
     // --- 3. LAS COLUMNAS ---
     // Seis, en circulo de radio 3.5 alrededor de la piscina. El angulo
@@ -3125,7 +3155,7 @@ fn main() {
         bloque(0.0, 5.5, -2.5, 3.0, 0.2, 2.0, &marmol),
         bloque(0.0, 5.5, 2.5, 3.0, 0.2, 2.0, &marmol),
     ];
-    objects.push(Box::new(GrupoAcotado::new(techo)));
+    objects.push(Box::new(GrupoAcotado::estatico(techo)));
 
     // --- 5. PEDESTAL Y TRIFORCE ---
     // En el centro del agua: dos cubos de obsidiana apilados (el de abajo
@@ -3203,6 +3233,38 @@ fn main() {
     // leccion ya la dejaron las estelas). Girando, un anillo barre la
     // esfera de radio `ANILLO_RADIO + ANILLO_GROSOR`, y esa tiene que ser
     // su caja de nacimiento.
+    // EL PILAR DE LUZ del climax: un cilindro emisivo que sale de la punta
+    // de la Trifuerza y se pierde en el cielo. Arranca con radio cero (no
+    // existe) y lo abre la animacion con el swell. El margen de su caja es
+    // el radio maximo, porque el arbol se arma una vez.
+    //
+    // Son DOS: un nucleo fino casi blanco y un halo rosa ancho que lo
+    // envuelve. El halo es emisivo y TRANSPARENTE (deja pasar el 70% sin
+    // desviar), asi que a traves de el se ve el nucleo: el borde del pilar
+    // queda suave y el centro quema, que es como se ve un haz de luz. Un
+    // solo cilindro de color parejo se leia como un tubo pintado.
+    let pilar = |radio: f32, transparencia: f32| {
+        Box::new(Cylinder {
+            center: Vec3::new(0.0, TRI_Y + TRI_ALTO * 2.0 + 0.05, 0.0),
+            radius: radio,
+            height: 45.0,
+            inner_radius: 0.0,
+            tile_size: 1.0,
+            material: Material::new(
+                [0.0, 0.0, 0.0, transparencia],
+                1.0,
+                1.0,
+                Texture::Solid(Color::WHITE),
+                Some(Color::BLACK),
+            ),
+        }) as Box<dyn RayIntersect + Send + Sync>
+    };
+    escena.registrar_pilar(objects.len());
+    objects.push(Box::new(GrupoAcotado::con_margen(
+        vec![pilar(animacion::PILAR_RADIO * 1.2, 0.0), pilar(animacion::PILAR_RADIO * 3.4, 0.85)],
+        0.05,
+    )));
+
     let centro_anillos = Vec3::new(0.0, animacion::ANILLO_Y, 0.0);
     let anillos: Vec<Box<dyn RayIntersect + Send + Sync>> = (0..animacion::ANILLOS)
         .map(|_| {
@@ -3303,40 +3365,8 @@ fn main() {
         racimo.extend(cristal_en(cx - 0.5 * sx, cz + 0.15 * sz, 0.3, 0.8, 0.35, None));
         racimo.extend(cristal_en(cx + 0.1 * sx, cz - 0.55 * sz, 0.26, 0.6, 0.3, None));
         escena.registrar_cristal(objects.len(), luz, color, region);
-        objects.push(Box::new(GrupoAcotado::new(racimo)));
+        objects.push(Box::new(GrupoAcotado::estatico(racimo)));
     }
-
-    // --- 5c. EL EMBLEMA EN EL MURO ---
-    // La Trifuerza grabada en la estela del fondo, en grande y apenas
-    // encendida: no es un objeto de la escena sino el MOTIVO del lugar,
-    // como el escudo tallado sobre la puerta de un templo. Esta lejos y en
-    // penumbra a proposito; lo que hace es contarte donde estas cuando la
-    // camara se abre.
-    //
-    // La cara de la estela esta en z = -10.3, asi que el emblema va un
-    // pelo delante para que no se pelee con ella por el mismo pixel.
-    let emblema = |v0: (f32, f32), v1: (f32, f32), v2: (f32, f32)| {
-        Box::new(Triangle {
-            a: Vec3::new(v0.0, v0.1, -10.25),
-            b: Vec3::new(v1.0, v1.1, -10.25),
-            c: Vec3::new(v2.0, v2.1, -10.25),
-            uv_a: None,
-            uv_b: None,
-            uv_c: None,
-            material: oro_muro.clone(),
-        }) as Box<dyn RayIntersect + Send + Sync>
-    };
-    // La estela va de y = -1 a y = 5 y mide 3.6 de ancho, asi que el
-    // emblema entra entero con margen: base en 2.2, lado 1.0, punta en
-    // 4.2. La altura tampoco es libre: mas abajo lo tapaban el altar y
-    // las columnas del fondo (se probo, y del emblema se veia un solo
-    // triangulo asomando), y mas arriba lo corta la losa del techo.
-    let (ex, ey, ee) = (0.0f32, 2.2f32, 1.0f32);
-    objects.push(Box::new(GrupoAcotado::new(vec![
-        emblema((ex - ee, ey), (ex, ey), (ex - ee / 2.0, ey + ee)),
-        emblema((ex, ey), (ex + ee, ey), (ex + ee / 2.0, ey + ee)),
-        emblema((ex - ee / 2.0, ey + ee), (ex + ee / 2.0, ey + ee), (ex, ey + 2.0 * ee)),
-    ])));
 
     // --- 5d. LAS RUPIAS ---
     // Tres, flotando y girando despacio sobre el agua. Cada una es una
@@ -3427,7 +3457,10 @@ fn main() {
             material: fuego.clone(),
         }));
     }
-    objects.push(Box::new(GrupoAcotado::new(entrada)));
+    objects.push(Box::new(GrupoAcotado::estatico(entrada)));
+
+    // LINK, tocando la ocarina en el escalon de la entrada. Ver `link.rs`.
+    escena.registrar_link(link::armar(&mut objects));
 
     // --- 6. LAS HADAS ---
     // Veintitres esferitas emisivas flotando en circulos alrededor de la
@@ -3503,20 +3536,22 @@ fn main() {
     // Las hadas CAEN despacio y renacen arriba (ver `animacion::hada_en`),
     // asi que sus grupos se arman con margen: la esfera acotante tiene que
     // cubrir hasta donde pueden llegar, no solo donde nacen.
-    for hadas in anillos {
-        let bases: Vec<(Vec3, f32, Color)> = hadas.clone();
-        let orbes: Vec<Box<dyn RayIntersect + Send + Sync>> = hadas
-            .into_iter()
-            .map(|(center, radius, emision)| {
-                Box::new(Sphere {
+    // Cada hada en su PROPIO grupo: un anillo entero de hadas tenia una
+    // caja que envolvia media fuente, y cualquier rayo que la cruzara
+    // probaba las ocho esferas. Sueltas, el arbol (que se rearma en cada
+    // cuadro con donde quedo cada una) descarta las que no estan cerca.
+    for (numero_anillo, hadas) in anillos.into_iter().enumerate() {
+        for (center, radius, emision) in hadas {
+            escena.registrar_orbes(objects.len(), vec![(center, radius, emision)], numero_anillo);
+            objects.push(Box::new(GrupoAcotado::con_margen(
+                vec![Box::new(Sphere {
                     center,
                     radius,
                     material: orbe(emision),
-                }) as Box<dyn RayIntersect + Send + Sync>
-            })
-            .collect();
-        escena.registrar_orbes(objects.len(), bases);
-        objects.push(Box::new(GrupoAcotado::con_margen(orbes, animacion::HADA_ALCANCE)));
+                }) as Box<dyn RayIntersect + Send + Sync>],
+                animacion::HADA_ALCANCE,
+            )));
+        }
     }
 
     // --- 6b. LAS ESTELAS DEL ARPA ---
@@ -3620,15 +3655,16 @@ fn main() {
     }
     // Las motas DERIVAN (ver `animacion`), asi que sus grupos van con
     // margen y se registran con el centro de nacimiento de cada una.
-    for motas in cuadrantes {
-        if !motas.is_empty() {
-            let centros: Vec<Vec3> = motas
-                .iter()
-                .filter_map(|m| m.bounds().map(|(c, _)| c))
-                .collect();
-            escena.registrar_polvo(objects.len(), centros);
-            objects.push(Box::new(GrupoAcotado::con_margen(motas, animacion::POLVO_ALCANCE)));
-        }
+    // UNA CAJA POR MOTA, y no una por cuadrante. Cada cuadrante media seis
+    // por cinco por tres unidades: cualquier rayo que cruzara la fuente
+    // entraba en su caja y probaba sus quince esferas, para no pegarle a
+    // ninguna (son motas de un centimetro). Con una caja chica por mota el
+    // arbol de la escena las descarta sin mirarlas. Medido con el
+    // perfilador: las esferas eran la segunda funcion mas cara del cuadro.
+    for mota in cuadrantes.into_iter().flatten() {
+        let centro = mota.bounds().map(|(c, _)| c).unwrap_or(Vec3::zeros());
+        escena.registrar_polvo(objects.len(), vec![centro]);
+        objects.push(Box::new(GrupoAcotado::con_margen(vec![mota], animacion::POLVO_ALCANCE)));
     }
 
     // ============================================================
@@ -3693,6 +3729,21 @@ fn main() {
         luz.intensity *= 1.15;
     }
 
+    // LA PANZA DE LA ISLA. Sin esto la mitad de abajo del diorama era una
+    // mancha negra: la miran las luces de la fuente, que estan arriba, y
+    // ninguna llega. Una luz violeta debajo, del color de los cristales que
+    // cuelgan, hace de su resplandor. No cuesta en el resto de la escena:
+    // todo lo que mira hacia arriba la tiene detras y la descarta antes de
+    // tirar el rayo de sombra.
+    lights.push(
+        Light::new(Vec3::new(0.0, -7.0, 0.0), color_f(0.75, 0.42, 1.0), 1.6).con_alcance(5.5),
+    );
+
+    // NAVI, revoloteando alrededor de Link con su propia luz, y las notas
+    // que salen de la ocarina. Va despues de las luces porque suma una.
+    escena.registrar_navi(navi::armar(&mut objects, &mut lights, link::boca()));
+
+    escena.registrar_isla(isla);
     escena.registrar_luces(&lights);
 
     // El cielo: se genera una vez y se muestrea por cada rayo que no pega
@@ -3722,7 +3773,7 @@ fn main() {
     // el emblema) y no tapan a nadie: un arbol solo con los que si tapan
     // es mas chico y ademas descarta mejor, porque sus cajas no tienen que
     // cubrir cosas que igual se iban a ignorar.
-    let (arbol, arbol_sombras) = arboles_de(&objects, &occluders);
+    let (mut arbol, mut arbol_sombras) = arboles_de(&objects, &occluders);
 
     println!(
         "objetos: {} en total, {} pueden dar sombra",
@@ -3959,7 +4010,7 @@ fn main() {
         let mut previa: Option<Camera> = None;
         let mut movimiento = 0.0f32;
         let mut costo_acum = 0.0f64;
-        let mut cam = orbita.camara(2.0);
+        let mut cam = orbita.camara_cine(&analisis.get_scene_params(t0));
         let mut ambiente_ultimo = ambiente_de(0.0, 0.0);
         let mut fase_agua_ultima = 0.0f32;
 
@@ -3967,8 +4018,9 @@ fn main() {
             let t = t0 + n as f32 * DT;
             let params = analisis.get_scene_params(t);
             animacion::actualizar_escena(&mut objects, &mut lights, &escena, &params);
+            (arbol, arbol_sombras) = arboles_de(&objects, &occluders);
             avanzar_noche(&mut cielo, &mut lights, &params);
-            cam = orbita.camara_cine(params.camera_target_y, params.cine);
+            cam = orbita.camara_cine(&params);
 
             let jitter = (halton(n + 1, 2), halton(n + 1, 3));
             // La referencia de mas abajo se traza fuera de este bucle y
@@ -4029,23 +4081,38 @@ fn main() {
         // estructura MEDIDA: el respiro inicial, el pico de la primera
         // seccion, la seccion plena del medio, el fondo del tema y el coro
         // final, que es el cuadro mas caro que existe.
-        for &t in &[9.0f32, 30.0, 87.0, 160.0, 202.0] {
+        // Los segundos a medir: los de siempre, o los que se pidan con
+        // `BENCH_T=46,96,136` para mirar un plano en particular.
+        let momentos: Vec<f32> = std::env::var("BENCH_T")
+            .ok()
+            .map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+            .unwrap_or_else(|| vec![9.0, 30.0, 87.0, 160.0, 202.0]);
+        for &t in &momentos {
             let params = analisis.get_scene_params(t);
             // El pendulo en el mismo instante de la cancion.
             let mut cam_orbita = Orbita::inicial();
             cam_orbita.avanzar(t, 0.0, 0.0, 0.0);
-            let cam = cam_orbita.camara_cine(params.camera_target_y, params.cine);
+            let cam = cam_orbita.camara_cine(&params);
             animacion::actualizar_escena(&mut objects, &mut lights, &escena, &params);
+            (arbol, arbol_sombras) = arboles_de(&objects, &occluders);
             avanzar_noche(&mut cielo, &mut lights, &params);
 
             let mut fb = Framebuffer::new(w, h, BACKGROUND);
-            let t0 = std::time::Instant::now();
-            render_rows(
-                &mut fb, &objects, &cielo, &arbol, &arbol_sombras, &lights, &cam, MAX_DEPTH,
-                false, (0.5, 0.5), ambiente_de(params.luz_del_dia, params.swell),
-                params.tiempo * animacion::AGUA_VELOCIDAD, 0, 0, h,
-            );
-            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            // EL MINIMO DE CINCO, no una sola pasada. En una notebook sin
+            // ventilador una medida suelta varia un 30% segun lo caliente
+            // que este el procesador, y con eso no se puede decidir si un
+            // cambio ayudo. El minimo es la medida con menos ruido encima.
+            let mut ms = f64::MAX;
+            for _ in 0..5 {
+                fb.clear();
+                let t0 = std::time::Instant::now();
+                render_rows(
+                    &mut fb, &objects, &cielo, &arbol, &arbol_sombras, &lights, &cam, MAX_DEPTH,
+                    false, (0.5, 0.5), ambiente_de(params.luz_del_dia, params.swell),
+                    params.tiempo * animacion::AGUA_VELOCIDAD, 0, 0, h,
+                );
+                ms = ms.min(t0.elapsed().as_secs_f64() * 1000.0);
+            }
 
             // Y lo mismo pero POR BANDAS, que es como lo hace la escena en
             // vivo (el trazado se corta cada `FILAS_POR_BANDA` filas para
@@ -4105,18 +4172,63 @@ fn main() {
         .nth(1)
         .and_then(|s| s.parse().ok());
 
+    // Para mirar un detalle de cerca sin tocar la orbita: `CAMARA=x,y,z,mx,my,mz`
+    // pone el ojo en (x, y, z) mirando a (mx, my, mz). Y `FOTO_NOMBRE` cambia
+    // el nombre del PNG, para no pisar las fotos que ya hay.
+    // ============================================================
+    //  MODO VIDEO  (--video <salida.mp4>)
+    // ============================================================
+    //
+    // Para el video del README. No corre en tiempo real: cada cuadro se
+    // traza al DOBLE de resolucion y con varias muestras por pixel (un
+    // antialiasing de verdad, no el temporal), pasa por el mismo
+    // post-procesado que en vivo, y se le entrega crudo a ffmpeg por un
+    // tubo, que lo junta con la musica. El tiempo lo pone el numero de
+    // cuadro, no el reloj, asi que el video sale a treinta cuadros por
+    // segundo exactos aunque cada uno tarde medio segundo en trazarse.
+    //
+    // `VIDEO_DESDE` y `VIDEO_HASTA` (en segundos) recortan el tramo, y
+    // `VIDEO_MUESTRAS` cambia las muestras por pixel (4 por defecto).
+    let video: Option<Video> = std::env::args()
+        .skip_while(|a| a != "--video")
+        .nth(1)
+        .map(|salida| {
+            let leer = |nombre: &str, defecto: f32| {
+                std::env::var(nombre).ok().and_then(|v| v.parse().ok()).unwrap_or(defecto)
+            };
+            let desde = leer("VIDEO_DESDE", 0.0);
+            Video {
+                salida,
+                desde,
+                hasta: leer("VIDEO_HASTA", analisis.duracion.max(1.0)),
+                muestras: leer("VIDEO_MUESTRAS", 4.0).max(1.0) as u32,
+                cuadro: 0,
+                ffmpeg: None,
+            }
+        });
+
+    let camara_forzada: Option<Camera> = std::env::var("CAMARA").ok().and_then(|s| {
+        let v: Vec<f32> = s.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        (v.len() == 6).then(|| mirar_a(Vec3::new(v[0], v[1], v[2]), Vec3::new(v[3], v[4], v[5])))
+    });
+
     // ============================================================
     //  VENTANA, BUFFERS Y TEXTURAS
     // ============================================================
     let (mut rl, thread) = raylib::init()
         .size(WIDTH as i32, HEIGHT as i32)
-        .title("Cueva de las hadas - trazada con rayos")
+        .title("Great Fairy Fountain - trazada con rayos")
         .build();
 
     // El buffer del trazador. Se crea UNA vez y se reusa toda la corrida:
     // el tamano no cambia nunca.
-    let mut framebuffer =
-        Framebuffer::new(RENDER_W as usize, RENDER_H as usize, BACKGROUND);
+    let (traza_w, traza_h) = if video.is_some() {
+        (RENDER_W as usize * 2, RENDER_H as usize * 2)
+    } else {
+        (RENDER_W as usize, RENDER_H as usize)
+    };
+    let mut framebuffer = Framebuffer::new(traza_w, traza_h, BACKGROUND);
+    let mut video = video;
 
     // La textura por la que el cuadro trazado entra a la GPU. Tambien se
     // crea una sola vez; cada cuadro solo se le suben bytes con
@@ -4145,7 +4257,7 @@ fn main() {
 
     println!("\ncontroles:");
     println!("  ESPACIO  play / pausa");
-    println!("  izq/der o A/D    girar alrededor de la cueva");
+    println!("  izq/der o A/D    girar alrededor de la isla");
     println!("  arriba/abajo o W/S   subir y bajar la camara");
     println!("  Q/E o PgUp/PgDn  acercar y alejar");
     println!("  mouse: arrastrar para orbitar, rueda para acercar");
@@ -4154,7 +4266,7 @@ fn main() {
     println!("  H        mostrar / ocultar la ayuda en pantalla");
     println!("  F        guardar una foto (PNG) del cuadro en pantalla");
     println!("  trazado fijo a {RENDER_W}x{RENDER_H}, estirado a {WIDTH}x{HEIGHT}");
-    println!("  la camara se balancea sola todo el tiempo; las teclas se suman al balanceo\n");
+    println!("  la camara da vueltas sola siguiendo la cancion; las teclas se suman a su recorrido\n");
 
     let mut anterior = std::time::Instant::now();
     let mut aviso_cuadro = true;
@@ -4180,8 +4292,19 @@ fn main() {
             reloj.alternar_pausa();
         }
     }
+    if video.is_some() && reloj.corriendo() {
+        reloj.alternar_pausa();
+    }
 
-    while !rl.window_should_close() {
+    // En el video no se sale hasta terminar: un pedido de cierre de la
+    // ventana a mitad de camino (se vio pasar, sin que nadie tocara nada, a
+    // los veintidos segundos de una grabacion de cuarenta minutos) dejaba el
+    // archivo cortado. Ni ESC ni el sistema lo interrumpen; se sale por
+    // `VIDEO_HASTA`.
+    if video.is_some() {
+        rl.set_exit_key(None);
+    }
+    while video.is_some() || !rl.window_should_close() {
         // Rellenar el buffer de audio. Va en CADA vuelta: si se saltea, el
         // sonido se corta apenas se vacia lo que raylib tenia por delante.
         reloj.actualizar();
@@ -4193,7 +4316,15 @@ fn main() {
         anterior = ahora;
 
         // EL numero del que depende toda la escena.
-        let tiempo = foto.unwrap_or_else(|| reloj.tiempo());
+        let tiempo = match &video {
+            Some(v) => v.tiempo(),
+            None => foto.unwrap_or_else(|| reloj.tiempo()),
+        };
+        if let Some(v) = &video {
+            if v.tiempo() >= v.hasta {
+                break;
+            }
+        }
         // Las tres capas ya vienen combinadas: estructura, ritmo y strobe.
         let params = analisis.get_scene_params(tiempo);
 
@@ -4279,15 +4410,24 @@ fn main() {
             d_phi = 0.0;
             d_radio = 0.0;
         }
-        orbita.avanzar(if foto.is_some() { 0.0 } else { dt }, d_theta, d_phi, d_radio);
-        // Siempre apuntando al centro de la cueva, a la ALTURA que pide la
-        // seccion de la cancion.
-        let camera = orbita.camara_cine(params.camera_target_y, params.cine);
+        if video.is_some() {
+            // La vuelta de la camara tambien la pone el numero de cuadro.
+            orbita.timer = tiempo;
+            d_theta = 0.0;
+            d_phi = 0.0;
+            d_radio = 0.0;
+        }
+        orbita.avanzar(if foto.is_some() || video.is_some() { 0.0 } else { dt }, d_theta, d_phi, d_radio);
+        // Mirando a donde pide el programa de camara (la fuente o Link).
+        let camera = camara_forzada
+            .unwrap_or_else(|| orbita.camara_cine(&params));
 
         // ---------- LA ESCENA SE MUEVE ----------
         // Antes de trazar, no despues: el cuadro que se dibuja abajo tiene
         // que ser el de este instante de la cancion.
         animacion::actualizar_escena(&mut objects, &mut lights, &escena, &params);
+        // EL ARBOL SE REARMA EN CADA CUADRO. Ver `arboles_de`.
+        (arbol, arbol_sombras) = arboles_de(&objects, &occluders);
         avanzar_noche(&mut cielo, &mut lights, &params);
 
         // ---------- TRAZADO ----------
@@ -4308,23 +4448,51 @@ fn main() {
         cuadro_taa = cuadro_taa.wrapping_add(1);
 
         let t_trazado = std::time::Instant::now();
-        framebuffer.clear();
-        render(
-            &mut framebuffer,
-            &objects,
-            &cielo,
-            &arbol,
-            &arbol_sombras,
-            &lights,
-            &camera,
-            MAX_DEPTH,
-            antialias,
-            jitter,
-            ambiente_de(params.luz_del_dia, params.swell),
-            params.tiempo * animacion::AGUA_VELOCIDAD,
-            cuadro_taa,
-            || reloj.actualizar(),
-        );
+        if let Some(v) = &video {
+            // Varias muestras por pixel, repartidas por Halton, promediadas
+            // a mano. El acumulador temporal no se usa: recorta la historia
+            // contra la vecindad del cuadro nuevo, que es lo que hace falta
+            // en vivo y justo lo que no hace falta aca, con la escena quieta.
+            let mut suma = vec![[0.0f32; 3]; traza_w * traza_h];
+            for k in 0..v.muestras {
+                framebuffer.clear();
+                render(
+                    &mut framebuffer, &objects, &cielo, &arbol, &arbol_sombras, &lights, &camera,
+                    MAX_DEPTH, false, (halton(k + 1, 2), halton(k + 1, 3)),
+                    ambiente_de(params.luz_del_dia, params.swell),
+                    params.tiempo * animacion::AGUA_VELOCIDAD, k, || {},
+                );
+                let (colores, _) = framebuffer.filas_mut(0, traza_h);
+                for (s, c) in suma.iter_mut().zip(colores.iter()) {
+                    s[0] += c.r as f32;
+                    s[1] += c.g as f32;
+                    s[2] += c.b as f32;
+                }
+            }
+            let n = v.muestras as f32;
+            let (colores, _) = framebuffer.filas_mut(0, traza_h);
+            for (c, s) in colores.iter_mut().zip(suma.iter()) {
+                *c = Color::new((s[0] / n) as u8, (s[1] / n) as u8, (s[2] / n) as u8, 255);
+            }
+        } else {
+            framebuffer.clear();
+            render(
+                &mut framebuffer,
+                &objects,
+                &cielo,
+                &arbol,
+                &arbol_sombras,
+                &lights,
+                &camera,
+                MAX_DEPTH,
+                antialias,
+                jitter,
+                ambiente_de(params.luz_del_dia, params.swell),
+                params.tiempo * animacion::AGUA_VELOCIDAD,
+                cuadro_taa,
+                || reloj.actualizar(),
+            );
+        }
         let ms_trazado = t_trazado.elapsed().as_secs_f32() * 1000.0;
 
         // El acumulador temporal. El peso del cuadro nuevo sube con lo que
@@ -4353,7 +4521,9 @@ fn main() {
             }
         };
         let t_acumular = std::time::Instant::now();
-        framebuffer.acumular(peso, &camera, camara_anterior.as_ref(), jitter);
+        if video.is_none() {
+            framebuffer.acumular(peso, &camera, camara_anterior.as_ref(), jitter);
+        }
         let ms_acumular = t_acumular.elapsed().as_secs_f32() * 1000.0;
         camara_anterior = Some(camera);
 
@@ -4435,7 +4605,15 @@ fn main() {
         // de camara, no una decision de encuadre, y un foquista no le
         // corre atras a cada tiempo: persiguiendolo, el plano de foco
         // temblaba a ritmo de negra.
-        let foco = orbita.distancia_de_foco(params.cine) / Framebuffer::PROFUNDIDAD_MAXIMA;
+        let foco = orbita.distancia_de_foco(&params) / Framebuffer::PROFUNDIDAD_MAXIMA;
+        // En el video el grano va apagado: es ruido distinto en cada cuadro,
+        // o sea justo lo que un compresor de video no puede comprimir, y con
+        // el el archivo pesaba el doble. En vivo se queda.
+        let params = if video.is_some() {
+            SceneParams { grain_amount: 0.0, ..params }
+        } else {
+            params
+        };
         post.efectos(&mut d, &texture, &params, tiempo, foco);
 
         // EL HUD NO SALE EN LAS FOTOS.
@@ -4450,7 +4628,7 @@ fn main() {
         // En vivo el HUD se queda, que es donde sirve: es el numero que
         // dice si la escena esta pesada, y sin verlo la unica forma de
         // saberlo es contar los saltos a ojo.
-        if foto.is_none() {
+        if foto.is_none() && video.is_none() {
             // El HUD baja para no quedar encima de la banda del formato ancho.
             let hud = 10 + (LETTERBOX_ALTO * params.cine * HEIGHT as f32) as i32;
             d.draw_fps(10, hud);
@@ -4484,7 +4662,7 @@ fn main() {
         // La ayuda: los primeros segundos y cuando se pide con H. Se
         // desvanece sola para no ensuciar la fuente.
         let desde_arranque = arranque.elapsed().as_secs_f32();
-        if ayuda && foto.is_none() {
+        if ayuda && foto.is_none() && video.is_none() {
             let alpha = if desde_arranque < 8.0 {
                 255
             } else if desde_arranque < 10.0 {
@@ -4516,13 +4694,32 @@ fn main() {
             }
         }
 
+        // EL CUADRO DEL VIDEO se lee ANTES de cerrar el dibujado: despues
+        // del intercambio de buffers lo que queda atras no esta garantizado.
+        if let Some(v) = video.as_mut() {
+            let imagen = d.load_image_from_screen(&thread);
+            v.entregar(imagen.width(), imagen.height(), &imagen.get_image_data());
+        }
+
         drop(d);
         cuadros += 1;
 
+        if let Some(v) = &video {
+            if v.cuadro % 30 == 0 {
+                println!(
+                    "video: {:.1} s de {:.1} ({:.0} ms por cuadro)",
+                    v.tiempo(),
+                    v.hasta,
+                    ms_trazado
+                );
+            }
+        }
+
         if guardar_foto {
-            let nombre = match foto {
-                Some(t) => format!("foto_t{t:.0}.png"),
-                None => format!("foto_{:.0}s.png", tiempo),
+            let nombre = match (foto, std::env::var("FOTO_NOMBRE")) {
+                (Some(_), Ok(n)) => n,
+                (Some(t), _) => format!("foto_t{t:.0}.png"),
+                (None, _) => format!("foto_{:.0}s.png", tiempo),
             };
             rl.take_screenshot(&thread, &nombre);
             println!("foto guardada: {nombre}");
@@ -4537,104 +4734,53 @@ fn main() {
 mod tests {
     use super::*;
 
-    /// La orbita inicial deja el ojo de frente, elevado y adentro de la
-    /// cueva, mirando al centro.
+    /// El programa pasa por sus planos y cierra el loop: el ultimo es el
+    /// primero, asi que al volver a empezar la cancion la camara no salta.
     #[test]
-    fn la_orbita_inicial_esta_de_frente() {
-        let cam = Orbita::inicial().camara(2.0);
-
-        // radio * sin(phi) y radio * cos(phi) sobre el punto de mira. Se
-        // calculan de las constantes y no se escriben a mano: este test se
-        // rompio una vez porque tenia el radio viejo clavado.
-        let r = Orbita::RADIO_INICIAL;
-        let ph = Orbita::PHI_BASE;
-        assert!((cam.position.x).abs() < 1e-4);
-        assert!((cam.position.y - (CAMARA_MIRA.y + r * ph.sin())).abs() < 0.05);
-        assert!((cam.position.z - r * ph.cos()).abs() < 0.05);
-
-        // Mira hacia -Z y un poco hacia abajo.
-        let f = cam.get_forward();
-        assert!(f.z < -0.9 && f.y < 0.0);
-    }
-
-    /// Los topes: ni el pendulo ni las teclas sacan el angulo de su rango,
-    /// y el radio tampoco se pasa.
-    #[test]
-    fn la_orbita_respeta_los_topes() {
-        let mut o = Orbita::inicial();
-        o.avanzar(0.0, 10.0, 10.0, 100.0);
-        assert_eq!(o.theta(), Orbita::THETA_MAX);
-        assert_eq!(o.phi(), Orbita::PHI_MAX);
-        assert_eq!(o.radio, Orbita::RADIO_MAX);
-
-        o.avanzar(0.0, -20.0, -20.0, -200.0);
-        assert_eq!(o.theta(), -Orbita::THETA_MAX);
-        assert_eq!(o.phi(), Orbita::PHI_MIN);
-        assert_eq!(o.radio, Orbita::RADIO_MIN);
-
-        // El corrimiento manual no acumula mas alla del tope: apenas se
-        // aprieta la otra tecla, la camara responde.
-        let antes = o.theta();
-        o.avanzar(0.0, 0.03, 0.0, 0.0);
-        assert!(o.theta() > antes);
-    }
-
-    /// Sin tocar nada, el recorrido entero queda DELANTE de la fuente y
-    /// adentro de la cueva: fuera del techo (que llega a |x|, |z| = 4),
-    /// sobre el piso (30 x 30) y lejos de la pared del fondo (z = -11).
-    #[test]
-    fn el_pendulo_no_sale_de_la_escena() {
-        let mut o = Orbita::inicial();
-        let paso = 0.1;
-        for _ in 0..(120.0 / paso) as usize {
-            o.avanzar(paso, 0.0, 0.0, 0.0);
-            let p = o.camara(2.0).position;
-            assert!(p.x.abs() < 14.0, "x = {}", p.x);
-            assert!(p.z > 4.5 && p.z < 14.0, "z = {}", p.z);
-            assert!(p.y > 0.5 && p.y < 8.0, "y = {}", p.y);
+    fn el_programa_pasa_por_sus_planos_y_cierra() {
+        for p in &PROGRAMA[..PROGRAMA.len() - 1] {
+            let (r, ph, m, _) = plano_en(p.t);
+            assert!((r - p.radio).abs() < 1e-3 && (ph - p.phi).abs() < 1e-3 && (m - p.mira_y).abs() < 1e-3);
         }
+        let fin = PROGRAMA[PROGRAMA.len() - 1].t;
+        let (a, b) = (plano_en(fin - 0.01), plano_en(0.01));
+        assert!((a.0 - b.0).abs() < 0.05 && (a.1 - b.1).abs() < 0.01);
     }
 
-    /// El pendulo oscila de verdad: llega cerca de los dos extremos y pasa
-    /// por el centro, con la altura respirando apenas.
+    /// Da la vuelta entera, y desde cualquier punto sigue afuera de la isla
+    /// (radio 7.6), por encima de la plaza y mirando al centro.
     #[test]
-    fn el_pendulo_oscila() {
+    fn la_orbita_da_la_vuelta_afuera_de_la_isla() {
         let mut o = Orbita::inicial();
-        let (mut min_t, mut max_t) = (f32::INFINITY, f32::NEG_INFINITY);
-        let (mut min_p, mut max_p) = (f32::INFINITY, f32::NEG_INFINITY);
-        for _ in 0..600 {
-            o.avanzar(0.1, 0.0, 0.0, 0.0);
-            min_t = min_t.min(o.theta());
-            max_t = max_t.max(o.theta());
-            min_p = min_p.min(o.phi());
-            max_p = max_p.max(o.phi());
+        let mut cuadrantes = [false; 4];
+        let mut t = 0.0;
+        while t < 183.0 {
+            o.avanzar(0.5, 0.0, 0.0, 0.0);
+            t += 0.5;
+            if o.encuadre(t).3 > 0.0 {
+                // Los planos de Link se acercan a proposito.
+                continue;
+            }
+            let cam = o.desde(o.encuadre(t).0, o.encuadre(t).1, 2.0);
+            let p = cam.position;
+            assert!((p.x * p.x + p.z * p.z).sqrt() > 8.0, "adentro de la isla en t = {t}");
+            assert!(p.y > 1.5, "por debajo de la plaza en t = {t}");
+            cuadrantes[(p.x > 0.0) as usize + 2 * (p.z > 0.0) as usize] = true;
+            let hacia = normalize(&(Vec3::new(0.0, 2.0, 0.0) - p));
+            assert!(dot(&hacia, &cam.get_forward()) > 0.999);
         }
-        // Los umbrales se escriben contra la CONSTANTE y no contra un
-        // numero suelto: asi el test sigue comprobando lo que le importa
-        // (que el pendulo recorra casi toda su amplitud a los dos lados)
-        // si alguien vuelve a mover `THETA_AMPLITUD`, en vez de romperse.
-        // Se rompio una vez por esto, cuando la amplitud bajo de 0.65 a
-        // 0.36 para sacar las columnas del centro del cuadro.
-        let casi = Orbita::THETA_AMPLITUD * 0.98;
-        assert!(min_t < -casi && max_t > casi, "theta: {min_t} a {max_t}");
-        assert!(min_p < 0.21 && max_p > 0.29, "phi: {min_p} a {max_p}");
+        assert!(cuadrantes.iter().all(|c| *c), "no dio la vuelta: {cuadrantes:?}");
     }
 
-    /// Desde cualquier punto del recorrido sigue mirando al centro, a la
-    /// distancia del radio.
+    /// Las teclas se suman al programa y respetan los topes.
     #[test]
-    fn la_orbita_mira_al_centro() {
+    fn las_teclas_se_suman_y_respetan_los_topes() {
         let mut o = Orbita::inicial();
-        for _ in 0..40 {
-            o.avanzar(0.7, 0.0, 0.0, 0.0);
-            let cam = o.camara(2.0);
-
-            let d = (cam.position - CAMARA_MIRA).magnitude();
-            assert!((d - o.distancia()).abs() < 1e-3);
-            assert!((d - Orbita::RADIO_INICIAL).abs() <= Orbita::RADIO_AMPLITUD + 1e-3);
-
-            let hacia_centro = normalize(&(CAMARA_MIRA - cam.position));
-            assert!(dot(&hacia_centro, &cam.get_forward()) > 0.999);
-        }
+        o.avanzar(0.0, 0.0, 10.0, 100.0);
+        let (r, ph, _, _) = o.encuadre(0.0);
+        assert!(r <= Orbita::RADIO_MAX && ph <= Orbita::PHI_MAX);
+        o.avanzar(0.0, 0.0, -20.0, -200.0);
+        let (r, ph, _, _) = o.encuadre(0.0);
+        assert!(r >= Orbita::RADIO_MIN && ph >= Orbita::PHI_MIN);
     }
 }

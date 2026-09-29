@@ -189,7 +189,9 @@ void main() {
     // desenfoque minimo (un pixel y medio), como un filtro difusor delante
     // de la lente. Los bordes dejan de ser de raytracer y pasan a ser de
     // foto.
-    float coc = SOFT_FOCUS + desenfoque(depth, focusDepth) * dofAmount;
+    // El cielo apenas se desenfoca: la aurora y las estrellas son el fondo
+    // del cuadro y borroneadas del todo se pierden.
+    float coc = SOFT_FOCUS + desenfoque(depth, focusDepth) * dofAmount * ((depth > 0.995) ? 0.3 : 1.0);
     if (coc > 0.0002) {
         vec3 suma = color;
         float peso = 1.0;

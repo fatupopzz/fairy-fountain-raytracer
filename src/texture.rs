@@ -155,6 +155,25 @@ impl TextureImage {
         }
     }
 
+    /// Una textura PINTADA POR CODIGO: se le pasa una funcion de (u, v), en
+    /// [0, 1] con v hacia abajo, que devuelve el color en [0, 1] por canal.
+    ///
+    /// Es lo que usan las texturas de Link (la cara, la tela de la tunica, el
+    /// escudo hyliano): ninguna sale de un archivo. Se evalua una vez por
+    /// texel al arrancar, asi que la funcion puede ser tan cara como haga
+    /// falta.
+    pub fn pintada(ancho: usize, alto: usize, f: impl Fn(f32, f32) -> [f32; 3]) -> Self {
+        let mut pixels = Vec::with_capacity(ancho * alto);
+        for y in 0..alto {
+            for x in 0..ancho {
+                let c = f((x as f32 + 0.5) / ancho as f32, (y as f32 + 0.5) / alto as f32);
+                let canal = |v: f32| (v * 255.0).clamp(0.0, 255.0) as u8;
+                pixels.push(Color::new(canal(c[0]), canal(c[1]), canal(c[2]), 255));
+            }
+        }
+        TextureImage { width: ancho, height: alto, pixels }
+    }
+
     /// `sample` para afuera del modulo: bilineal, con las UV en [0, 1].
     pub fn muestrear(&self, u: f32, v: f32) -> Color {
         self.sample(u, v)
@@ -292,7 +311,7 @@ fn valor_hash(x: usize, y: usize) -> f32 {
 /// suman `octavas` capas de ruido de valor interpolado, cada una con el
 /// doble de frecuencia y la mitad de peso, que es lo que le da a la piedra
 /// bultos grandes con grano fino encima en vez de una sola escala.
-fn campo_fbm(tam: usize, celdas: usize, octavas: usize, semilla: u32) -> Vec<f32> {
+pub fn campo_fbm(tam: usize, celdas: usize, octavas: usize, semilla: u32) -> Vec<f32> {
     let mut campo = vec![0.0f32; tam * tam];
     let mut peso = 1.0f32;
     let mut suma = 0.0f32;

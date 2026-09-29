@@ -1,6 +1,7 @@
 use crate::material::Material;
 use crate::ray_intersect::{Intersect, RayIntersect};
 use crate::vec3::{dot, normalize, Vec3};
+use raylib::prelude::Color;
 
 /// Hasta donde llega un plano con limite, alrededor de su `point`.
 #[derive(Clone, Copy, Debug)]
@@ -133,7 +134,17 @@ pub struct Plane {
     /// pasa de largo.
     pub limite: Option<Limite>,
     pub material: Material,
+    /// LOS ANILLOS DEL GOLPE: cada uno es (radio, fuerza). Salen del centro
+    /// en cada tiempo de la cancion y se abren hasta el borde de la
+    /// piscina, encendidos y levantando el agua a su paso. Los pone la
+    /// animacion en cada cuadro (ver `animacion::ondas_del_golpe`).
+    pub ondas: Vec<(f32, f32)>,
+    /// El color de la luz de los anillos.
+    pub onda_color: (f32, f32, f32),
 }
+
+/// El ancho de un anillo, en unidades: el desvio de la campana.
+const ONDA_ANCHO: f32 = 0.11;
 
 impl Plane {
     /// La t del impacto contra el plano infinito, si lo hay adelante del
@@ -230,6 +241,19 @@ impl Plane {
         slope_x += px;
         slope_z += pz;
 
+        // El anillo levanta el agua: una loma de campana que corre hacia
+        // afuera. Su pendiente es la derivada de la campana, que cambia de
+        // signo en la cresta; eso es lo que hace que el reflejo se tuerza a
+        // un lado y al otro del anillo, como una onda de verdad.
+        for &(radio, fuerza) in &self.ondas {
+            let x = (distance - radio) / ONDA_ANCHO;
+            if x.abs() < 3.0 {
+                let pendiente = -2.0 * x * (-x * x).exp() * fuerza * 2.2;
+                slope_x += pendiente * dx / distance;
+                slope_z += pendiente * dz / distance;
+            }
+        }
+
         // La normal de una superficie de altura h(x, z) es (-dh/dx, 1, -dh/dz).
         normalize(&Vec3::new(
             -slope_x * self.ripple_strength,
@@ -308,9 +332,60 @@ impl RayIntersect for Plane {
 
             let normal = self.rippled_normal(&hit_point);
 
-            Intersect::new(hit_point, normal, t, &self.material, u, v)
+            let mut hit = Intersect::new(hit_point, normal, t, &self.material, u, v);
+            if !self.ondas.is_empty() {
+                let (dx, dz) = (hit_point.x - self.ripple_center.x, hit_point.z - self.ripple_center.z);
+                let r = (dx * dx + dz * dz).sqrt();
+                let luz: f32 = self
+                    .ondas
+                    .iter()
+                    .map(|&(radio, fuerza)| {
+                        let x = (r - radio) / ONDA_ANCHO;
+                        if x.abs() < 3.0 { (-x * x).exp() * fuerza } else { 0.0 }
+                    })
+                    .sum();
+                if luz > 0.004 {
+                    let (cr, cg, cb) = self.onda_color;
+                    let c = |k: f32| (k * luz * 1.8 * 255.0).min(255.0) as u8;
+                    hit.brillo = Some(Color::new(c(cr), c(cg), c(cb), 255));
+                }
+            }
+            hit
         } else {
             Intersect::empty()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_ondas {
+    use super::*;
+    use crate::texture::Texture;
+
+    fn agua(ondas: Vec<(f32, f32)>) -> Plane {
+        Plane {
+            point: Vec3::new(0.0, 0.0, 0.0),
+            normal: Vec3::new(0.0, 1.0, 0.0),
+            ripple_center: Vec3::zeros(),
+            ripple_strength: 0.0,
+            ripple_scale: 3.0,
+            ripple_phase: 0.0,
+            uv_scale: 1.0,
+            limite: None,
+            material: Material::new([1.0, 0.0, 0.0, 0.0], 1.0, 0.0, Texture::Solid(Color::WHITE), None),
+            ondas,
+            onda_color: (1.0, 0.5, 0.9),
+        }
+    }
+
+    /// Un anillo enciende el agua sobre su radio y en ningun otro lado.
+    #[test]
+    fn el_anillo_brilla_solo_en_su_radio() {
+        let plano = agua(vec![(1.5, 1.0)]);
+        let abajo = Vec3::new(0.0, -1.0, 0.0);
+        let en = |x: f32| plano.ray_intersect(&Vec3::new(x, 2.0, 0.0), &abajo).brillo;
+        assert!(en(1.5).is_some_and(|c| c.r > 200), "el anillo no se encendio");
+        assert!(en(0.5).is_none() && en(2.6).is_none(), "el agua brilla lejos del anillo");
+        assert!(agua(Vec::new()).ray_intersect(&Vec3::new(1.5, 2.0, 0.0), &abajo).brillo.is_none());
     }
 }

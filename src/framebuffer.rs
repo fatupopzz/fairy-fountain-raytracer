@@ -144,8 +144,8 @@ impl Framebuffer {
         let (der_hoy, arr_hoy, ade_hoy) = ahora.basis();
         let (der_ayer, arr_ayer, ade_ayer) = antes.basis();
 
-        // El mismo lente que arma los rayos en `render_rows`: 45 grados.
-        let escala = (std::f32::consts::PI / 8.0).tan();
+        // El mismo lente que arma los rayos en `render_rows`.
+        let escala = (crate::camera::CAMPO_VISUAL / 2.0).tan();
         let aspecto = w as f32 / h as f32;
 
         // Cada fila es independiente: solo lee de los buffers viejos y

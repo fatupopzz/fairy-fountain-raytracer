@@ -282,6 +282,12 @@ void main() {
     float depth = original.a;
     float d = fogDensity * depth * 5.3;
     float fogFactor = 1.0 - exp(-d * d);
+    // EL CIELO NO SE ENNIEBLA. La niebla es aire entre la camara y lo que
+    // se mira, y el cielo esta infinitamente lejos: con la formula de arriba
+    // la aurora y las nubes se lavaban a un color plano. Queda un velo
+    // apenas, lo justo para que el horizonte no corte seco contra la isla.
+    // El trazador marca el cielo con la profundidad maxima.
+    fogFactor *= (depth > 0.995) ? 0.12 : 1.0;
     color = mix(color, pow(fogColor, vec3(2.2)), fogFactor);
 
     // --- Tinte global ---

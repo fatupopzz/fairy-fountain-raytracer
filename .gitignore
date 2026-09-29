@@ -17,3 +17,6 @@ taa_*.png
 .DS_Store
 *.bak
 loser_sync.json
+
+# El video en alta calidad pesa casi 100 MB; al repo va la version liviana
+docs/fuente_de_las_hadas_hq.mp4

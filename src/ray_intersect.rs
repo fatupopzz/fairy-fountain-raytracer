@@ -36,6 +36,11 @@ pub struct Intersect<'a> {
     pub u: f32,
     pub v: f32,
     pub is_intersecting: bool,
+    /// Luz propia de ESTE punto, ademas de la del material. La usa el agua
+    /// para los anillos que la cruzan con el golpe (ver `Plane::ondas`): la
+    /// emision del material es una para toda la superficie, y un anillo es
+    /// luz en un lugar y no en otro.
+    pub brillo: Option<Color>,
 }
 
 impl<'a> Intersect<'a> {
@@ -55,6 +60,7 @@ impl<'a> Intersect<'a> {
             u,
             v,
             is_intersecting: true,
+            brillo: None,
         }
     }
 
@@ -68,6 +74,7 @@ impl<'a> Intersect<'a> {
             u: 0.0,
             v: 0.0,
             is_intersecting: false,
+            brillo: None,
         }
     }
 }

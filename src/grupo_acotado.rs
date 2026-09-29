@@ -1,3 +1,4 @@
+use crate::bvh::Bvh;
 use crate::ray_intersect::{Intersect, RayIntersect};
 use crate::vec3::Vec3;
 
@@ -23,6 +24,9 @@ pub struct GrupoAcotado {
     min: Vec3,
     max: Vec3,
     children: Vec<Box<dyn RayIntersect + Send + Sync>>,
+    /// Un arbol PROPIO sobre los hijos, para los grupos que no se mueven.
+    /// Ver `estatico`.
+    arbol: Option<Bvh>,
 }
 
 impl GrupoAcotado {
@@ -49,7 +53,29 @@ impl GrupoAcotado {
             min: min - m,
             max: max + m,
             children,
+            arbol: None,
         }
+    }
+
+    /// Un grupo que NO SE MUEVE, con un arbol propio sobre sus hijos.
+    ///
+    /// El grupo comun prueba a todos sus hijos en fila cada vez que un rayo
+    /// entra en su caja. Con los tres o cuatro de una columna eso es lo mas
+    /// barato que hay, pero la isla tiene capas de quince cubos, el techo
+    /// catorce y la piscina diez, y un rayo de sombra que cruza el techo
+    /// probaba los catorce para descubrir que lo tapa uno. Con el arbol,
+    /// prueba los dos o tres que estan sobre su camino. Medido con el
+    /// perfilador: recorrer grupos en fila era la cuarta parte del cuadro.
+    ///
+    /// Solo sirve si los hijos se quedan quietos, porque el arbol se arma
+    /// una vez con sus cajas. Lo que se mueve (Link, las hadas, las notas)
+    /// sigue en grupos comunes.
+    pub fn estatico(children: Vec<Box<dyn RayIntersect + Send + Sync>>) -> Self {
+        let mut grupo = Self::new(children);
+        let cajas: Vec<(usize, Option<(Vec3, Vec3)>)> =
+            grupo.children.iter().enumerate().map(|(i, c)| (i, c.aabb())).collect();
+        grupo.arbol = Some(Bvh::construir(&cajas));
+        grupo
     }
 
     /// Vuelve a calcular la caja a partir de donde estan los hijos AHORA,
@@ -66,6 +92,15 @@ impl GrupoAcotado {
     /// estela que esta cruzando se prueba solo si el rayo pasa cerca, y las
     /// ranuras apagadas (radio cero) quedan con una caja de tamano cero que
     /// no toca ningun rayo.
+    /// Un grupo con una caja PUESTA A MANO, que es la que va al arbol. Es
+    /// para lo que va a recorrer una zona que al armarse todavia no ocupa:
+    /// las notas de la ocarina nacen todas en la boca de Link y despues se
+    /// reparten por el aire. El arbol se arma una sola vez, asi que la caja
+    /// que ve tiene que abarcar todo el recorrido desde el principio.
+    pub fn con_caja(children: Vec<Box<dyn RayIntersect + Send + Sync>>, min: Vec3, max: Vec3) -> Self {
+        GrupoAcotado { min, max, children, arbol: None }
+    }
+
     pub fn recalcular_caja(&mut self, margen: f32) {
         let (min, max) = Self::caja(&self.children);
         let m = Vec3::new(margen, margen, margen);
@@ -161,10 +196,21 @@ impl RayIntersect for GrupoAcotado {
             return Intersect::empty();
         }
 
-        // Adentro del grupo se hace lo mismo que en el bucle principal de la
-        // escena: gana el impacto de menor t positiva.
         let mut nearest = f32::INFINITY;
         let mut result = Intersect::empty();
+
+        if let Some(arbol) = &self.arbol {
+            arbol.recorrer(origin, direction, f32::INFINITY, |i, limite| {
+                let hit = self.children[i].ray_intersect(origin, direction);
+                if hit.is_intersecting && hit.distance < nearest {
+                    nearest = hit.distance;
+                    result = hit;
+                    return nearest;
+                }
+                limite
+            });
+            return result;
+        }
 
         for child in &self.children {
             let hit = child.ray_intersect(origin, direction);
@@ -177,25 +223,26 @@ impl RayIntersect for GrupoAcotado {
         result
     }
 
-    /// Un grupo tapa solo si alguno de sus hijos puede. Los dos anillos son
-    /// todo esferas emisivas, asi que sus nueve grupos se van enteros del
-    /// bucle de sombras: nueve cuadraticas menos por luz y por impacto.
     fn puede_tapar(&self) -> bool {
         self.children.iter().any(|hijo| hijo.puede_tapar())
     }
 
-    /// Para tapar la luz alcanza con UN hijo: se sale con el primero que
-    /// lo haga, sin mirar los demas. `any` ya corta solo.
-    ///
-    /// Esto ademas ARREGLA algo. Por `ray_intersect` el grupo devuelve un
-    /// solo impacto, el mas cercano, y el rayo de sombra descarta lo que
-    /// brilla solo: si el farol emisivo quedaba delante de su columna, el
-    /// grupo devolvia el farol, el farol se descartaba, y la columna no se
-    /// probaba nunca. Esa columna dejaba de dar sombra. Aca cada hijo
-    /// responde por su cuenta y el farol no tapa a nadie.
     fn occluded(&self, origin: &Vec3, direction: &Vec3, max_distance: f32) -> bool {
         if !self.hits_bounds(origin, direction) {
             return false;
+        }
+
+        if let Some(arbol) = &self.arbol {
+            let mut tapado = false;
+            arbol.recorrer(origin, direction, max_distance, |i, limite| {
+                if self.children[i].occluded(origin, direction, max_distance) {
+                    tapado = true;
+                    0.0
+                } else {
+                    limite
+                }
+            });
+            return tapado;
         }
 
         self.children
@@ -203,15 +250,20 @@ impl RayIntersect for GrupoAcotado {
             .any(|child| child.occluded(origin, direction, max_distance))
     }
 
-    /// Lo que deja pasar el grupo es el PRODUCTO de lo que deja pasar cada
-    /// hijo en el camino: dos caras de cristal atenuan dos veces. Se corta
-    /// en cuanto alguno tapa del todo.
     fn transmision(&self, origin: &Vec3, direction: &Vec3, max_distance: f32) -> f32 {
         if !self.hits_bounds(origin, direction) {
             return 1.0;
         }
 
         let mut pasa = 1.0f32;
+        if let Some(arbol) = &self.arbol {
+            arbol.recorrer(origin, direction, max_distance, |i, limite| {
+                pasa *= self.children[i].transmision(origin, direction, max_distance);
+                if pasa <= 0.0 { 0.0 } else { limite }
+            });
+            return pasa.max(0.0);
+        }
+
         for child in &self.children {
             pasa *= child.transmision(origin, direction, max_distance);
             if pasa <= 0.0 {
@@ -221,8 +273,6 @@ impl RayIntersect for GrupoAcotado {
         pasa
     }
 
-    /// Un grupo se acota como cualquier otra primitiva, asi que se pueden
-    /// meter grupos adentro de grupos y el de afuera calcula su volumen solo.
     fn aabb(&self) -> Option<(Vec3, Vec3)> {
         if self.min.x.is_finite() && self.max.x.is_finite() {
             Some((self.min, self.max))

@@ -39,7 +39,7 @@ pub struct EscenaViva {
     /// escribe a todos, que es justo lo que hace falta. Los grupos tienen
     /// que haberse armado con `GrupoAcotado::con_margen(.., HADA_ALCANCE)`,
     /// porque las hadas se MUEVEN y la esfera acotante no se recalcula.
-    orbes: Vec<(usize, Vec<(Vec3, f32, Color)>)>,
+    orbes: Vec<(usize, Vec<(Vec3, f32, Color)>, usize)>,
     /// EL GRUPO DE LAS ESTELAS: las que cruzan la fuente con el arpa.
     ///
     /// Un solo grupo con `ESTELAS * ESTELA_SEGMENTOS` esferas adentro,
@@ -73,6 +73,14 @@ pub struct EscenaViva {
     /// hijos es la esfera, su color de nacimiento y que region del circulo
     /// de quintas le toca.
     cristales: Vec<(usize, usize, Color, usize)>,
+    /// Link, si esta en la escena. Ver `link.rs`.
+    link: Option<crate::link::LinkVivo>,
+    /// Navi y las notas de la ocarina. Ver `navi.rs`.
+    navi: Option<crate::navi::NaviViva>,
+    /// La isla: lo unico que se mueve son las cascadas. Ver `isla.rs`.
+    isla: Option<crate::isla::IslaViva>,
+    /// El pilar de luz del climax: el grupo y el hijo.
+    pilar: Option<usize>,
 }
 
 /// Una rupia que gira sobre su eje y flota.
@@ -98,6 +106,10 @@ impl EscenaViva {
             polvo: Vec::new(),
             rupias: Vec::new(),
             cristales: Vec::new(),
+            link: None,
+            navi: None,
+            isla: None,
+            pilar: None,
         }
     }
 
@@ -139,8 +151,11 @@ impl EscenaViva {
 
     /// Anota un grupo de orbes de hada. `bases` (centro, radio y emision de
     /// cada una) va en el mismo orden en que se metieron los hijos al grupo.
-    pub fn registrar_orbes(&mut self, indice: usize, bases: Vec<(Vec3, f32, Color)>) {
-        self.orbes.push((indice, bases));
+    ///
+    /// `anillo` es a que anillo de hadas pertenece: los pares giran en un
+    /// sentido y los impares en el otro.
+    pub fn registrar_orbes(&mut self, indice: usize, bases: Vec<(Vec3, f32, Color)>, anillo: usize) {
+        self.orbes.push((indice, bases, anillo));
     }
 
     /// Se llama UNA vez, con las luces ya construidas.
@@ -152,6 +167,22 @@ impl EscenaViva {
     /// Anota el grupo de los anillos de la Trifuerza.
     pub fn registrar_anillos(&mut self, grupo: usize) {
         self.anillos.push(grupo);
+    }
+
+    pub fn registrar_link(&mut self, link: crate::link::LinkVivo) {
+        self.link = Some(link);
+    }
+
+    pub fn registrar_navi(&mut self, navi: crate::navi::NaviViva) {
+        self.navi = Some(navi);
+    }
+
+    pub fn registrar_isla(&mut self, isla: crate::isla::IslaViva) {
+        self.isla = Some(isla);
+    }
+
+    pub fn registrar_pilar(&mut self, grupo: usize) {
+        self.pilar = Some(grupo);
     }
 
     pub fn registrar_luces(&mut self, luces: &[Light]) {
@@ -254,6 +285,17 @@ pub const POLVO_ALCANCE: f32 = 0.45;
 /// que cruza la piscina en unos ocho segundos: lento, es una fuente y no
 /// una playa.
 pub const AGUA_VELOCIDAD: f32 = 1.5;
+
+/// Los anillos del golpe: de donde salen (el borde del altar), a que
+/// velocidad se abren y cuanto viven. A 1.6 unidades por segundo llegan al
+/// borde de la piscina en un segundo y medio, o sea en tres tiempos: cada
+/// anillo del uno cruza el agua entera antes del compas siguiente.
+const ONDA_RADIO_INICIAL: f32 = 0.55;
+const ONDA_VELOCIDAD: f32 = 1.6;
+const ONDA_VIDA: f32 = 1.5;
+
+/// El radio del pilar de luz a pleno.
+pub const PILAR_RADIO: f32 = 0.2;
 
 /// Donde esta y cuanto se ve el hada numero `k` (de `total`) en el segundo
 /// `tiempo`, partiendo de donde nacio: `(posicion, presencia)`, con
@@ -684,6 +726,20 @@ pub fn actualizar_escena(
     actualizar_estelas(objetos, escena, params);
     actualizar_anillos(objetos, escena, params);
 
+    // Link se mece con la cancion, y la ocarina se enciende con cada nota
+    // del arpa: medio segundo de brillo que se apaga en curva.
+    if let Some(link) = &escena.link {
+        let nota = params
+            .ataques
+            .iter()
+            .filter_map(|&(_, t)| {
+                let edad = params.tiempo - t;
+                (0.0..0.5).contains(&edad).then(|| (1.0 - edad / 0.5).powi(2))
+            })
+            .fold(0.0f32, f32::max);
+        link.actualizar(objetos, params, nota);
+    }
+
     // Las hadas: caen despacio, se deshacen con el arpa y renacen, y
     // brillan con la cancion. La presencia entra en el radio Y en la
     // emision: con el radio en cero al deshacerse, no queda ni una bolita
@@ -699,9 +755,9 @@ pub fn actualizar_escena(
     //
     // Encima, un vaiven vertical AL TEMPO, chiquito y con fase propia por
     // hada, que crece con la energia lenta del tema.
-    let total: usize = escena.orbes.iter().map(|(_, bases)| bases.len()).sum();
+    let total: usize = escena.orbes.iter().map(|(_, bases, _)| bases.len()).sum();
     let mut k = 0;
-    for (anillo, (indice, bases)) in escena.orbes.iter().enumerate() {
+    for (indice, bases, anillo) in escena.orbes.iter() {
         let Some(objeto) = objetos.get_mut(*indice) else {
             continue;
         };
@@ -709,7 +765,7 @@ pub fn actualizar_escena(
             continue;
         };
 
-        let sentido = if anillo % 2 == 0 { 1.0 } else { -1.0 };
+        let sentido = if *anillo % 2 == 0 { 1.0 } else { -1.0 };
         let (sg, cg) = (params.giro_hadas * sentido).sin_cos();
 
         for (hijo, (centro, radio, emision)) in grupo.children_mut().iter_mut().zip(bases.iter()) {
@@ -744,6 +800,9 @@ pub fn actualizar_escena(
             }
             k += 1;
         }
+        // La caja se ajusta a donde quedaron las hadas: el arbol de la escena
+        // se rearma en cada cuadro con estas cajas (ver `arboles_de`).
+        grupo.recalcular_caja(0.0);
     }
 
     // El agua: los anillos viajan desde el pedestal (la fase avanza con el
@@ -760,6 +819,21 @@ pub fn actualizar_escena(
             .and_then(|h| (h.as_mut() as &mut dyn Any).downcast_mut::<Plane>());
         if let Some(agua) = agua {
             agua.ripple_strength = params.oleaje;
+            // Los anillos del golpe: salen del pie del altar y corren hacia
+            // el borde, apagandose. Todo sale de la edad del golpe, asi que
+            // el mismo segundo da siempre los mismos anillos.
+            agua.ondas.clear();
+            for &(t0, fuerza) in &params.ondas {
+                let edad = params.tiempo - t0;
+                if !(0.0..ONDA_VIDA).contains(&edad) {
+                    continue;
+                }
+                let vida = 1.0 - edad / ONDA_VIDA;
+                // Entra en un suspiro, no de golpe: sin esto el anillo nace
+                // entero en un cuadro y se ve como un parpadeo del agua.
+                let entra = (edad / 0.08).min(1.0);
+                agua.ondas.push((ONDA_RADIO_INICIAL + edad * ONDA_VELOCIDAD, fuerza * vida * vida * entra));
+            }
             agua.ripple_phase = params.tiempo * AGUA_VELOCIDAD;
             agua.material
                 .texture
@@ -796,12 +870,18 @@ pub fn actualizar_escena(
     // El polvo de hada deriva: cada mota sube y baja y se mece con senos
     // de fase propia, lento, como pelusa en el aire. Funcion pura del
     // tiempo: nunca se aleja mas de `POLVO_ALCANCE` de donde nacio.
+    // La fase de cada mota sale de su numero en TODA la escena, no dentro
+    // de su grupo: cada mota tiene su propio grupo, y contando adentro
+    // todas tendrian la fase cero y se moverian al unisono.
+    let mut numero_mota = 0usize;
     for (grupo, centros) in &escena.polvo {
         let g = objetos
             .get_mut(*grupo)
             .and_then(|o| (o.as_mut() as &mut dyn Any).downcast_mut::<GrupoAcotado>());
         let Some(g) = g else { continue };
-        for (i, (hijo, centro)) in g.children_mut().iter_mut().zip(centros.iter()).enumerate() {
+        for (hijo, centro) in g.children_mut().iter_mut().zip(centros.iter()) {
+            let i = numero_mota;
+            numero_mota += 1;
             if let Some(mota) = (hijo.as_mut() as &mut dyn Any).downcast_mut::<Sphere>() {
                 let fase = i as f32 * 1.7;
                 let t = params.tiempo;
@@ -813,6 +893,7 @@ pub fn actualizar_escena(
                     );
             }
         }
+        g.recalcular_caja(0.0);
     }
 
     // LAS RUPIAS giran sobre su eje y flotan. Girar un triangulo es
@@ -859,6 +940,7 @@ pub fn actualizar_escena(
                 t.c = girar(c);
             }
         }
+        grupo.recalcular_caja(0.0);
     }
 
     // LOS CRISTALES respiran con la armonia. Cada uno tiene su tercio del
@@ -894,6 +976,41 @@ pub fn actualizar_escena(
         };
 
         luz.intensity = base * multiplicador;
+    }
+
+    // Navi y las notas van despues de las luces: Navi mueve la suya, y el
+    // bucle de arriba la pisaria si fuera antes.
+    if let Some(isla) = &escena.isla {
+        isla.actualizar(objetos, params);
+    }
+
+    // EL PILAR DE LUZ: cuando las voces se sostienen (el swell, el climax
+    // del tema) sube una columna de luz desde la Trifuerza hasta el cielo,
+    // como cuando en el juego aparece el Hada Mayor. Crece con el swell y
+    // late con el golpe; sin swell no existe.
+    if let Some(g) = escena.pilar {
+        if let Some(grupo) = objetos
+            .get_mut(g)
+            .and_then(|o| (o.as_mut() as &mut dyn Any).downcast_mut::<GrupoAcotado>())
+        {
+            let s = params.swell.clamp(0.0, 1.0);
+            let s = s * s * (3.0 - 2.0 * s);
+            let late = 0.85 + 0.3 * params.pulso;
+            // (radio relativo, color) del nucleo y del halo.
+            const CAPAS: [(f32, (f32, f32, f32)); 2] = [(1.0, (255.0, 255.0, 255.0)), (2.8, (255.0, 150.0, 230.0))];
+            for (hijo, &(escala, (r, g, b))) in grupo.children_mut().iter_mut().zip(CAPAS.iter()) {
+                if let Some(pilar) = (hijo.as_mut() as &mut dyn Any).downcast_mut::<crate::cylinder::Cylinder>() {
+                    pilar.radius = if s > 0.01 { PILAR_RADIO * escala * s * late } else { 0.0 };
+                    let k = s * (0.75 + 0.35 * params.pulso).min(1.0) * if escala > 1.0 { 0.30 } else { 1.0 };
+                    pilar.material.emission_color =
+                        Some(Color::new((r * k) as u8, (g * k) as u8, (b * k) as u8, 255));
+                }
+            }
+        }
+    }
+
+    if let (Some(navi), Some(link)) = (&escena.navi, &escena.link) {
+        navi.actualizar(objetos, luces, link, params);
     }
 }
 
