@@ -27,8 +27,8 @@ Ni matemática de vectores, ni intersecciones, ni BVH, ni sombreado.
 ## Video
 
 **[▶ Ver el video completo (docs/fuente_de_las_hadas.mp4)](docs/fuente_de_las_hadas.mp4)**
-— la canción entera, 1280×960, grabada con `--video` (48 MB; la versión en
-alta calidad, de casi 100 MB, se regenera con el mismo comando y no va al repo).
+— la canción entera, 1280×960, grabada con `--video` (54 MB; la versión en
+alta calidad, de 104 MB, se regenera con el mismo comando y no va al repo).
 
 [![La fuente de noche](docs/portada.jpg)](docs/fuente_de_las_hadas.mp4)
 
@@ -400,6 +400,7 @@ Medido en un MacBook Air M3, trazando a 400×300 y estirando a 800×600, con
 |---|---|---|
 | Trazado, media de los cinco momentos | 36.6 ms (27 fps) | **24 ms (41 fps)** |
 | Peor plano | 44 ms (segundo 160) | ~44 ms (la bendición, de cerca) |
+| El Fuego de Din (cúpula sobre toda la fuente) | — | 37 ms |
 
 Y eso con la escena **casi ocho veces más grande** (de 34 a 262 objetos, de 8 a 12
 luces). Las notebooks sin ventilador varían un 30% según la temperatura, así
