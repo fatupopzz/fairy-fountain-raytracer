@@ -77,28 +77,35 @@ impl Framebuffer {
         let Some(paridad) = self.tablero else { return };
         let (w, h) = (self.width, self.height);
         let luz = |c: Color| c.r as i32 * 2 + c.g as i32 * 5 + c.b as i32;
-        for y in 0..h {
-            for x in 0..w {
-                if Self::se_traza(Some(paridad), x, y) {
-                    continue;
+        // Se lee de una copia y se escribe por filas en paralelo: una fila
+        // necesita las de arriba y abajo, y con la copia ninguna fila
+        // escribe lo que otra esta leyendo.
+        let fuente = self.buffer.clone();
+        let prof = self.depth.clone();
+        self.buffer
+            .par_chunks_mut(w)
+            .zip(self.depth.par_chunks_mut(w))
+            .enumerate()
+            .for_each(|(y, (fila, fila_prof))| {
+                for x in 0..w {
+                    if Self::se_traza(Some(paridad), x, y) {
+                        continue;
+                    }
+                    let i = y * w + x;
+                    // En el borde de la imagen falta un vecino: se repite el otro.
+                    let izq = if x > 0 { i - 1 } else { i + 1 };
+                    let der = if x + 1 < w { i + 1 } else { i - 1 };
+                    let arr = if y > 0 { i - w } else { i + w };
+                    let aba = if y + 1 < h { i + w } else { i - w };
+                    let dif_h = (luz(fuente[izq]) - luz(fuente[der])).abs();
+                    let dif_v = (luz(fuente[arr]) - luz(fuente[aba])).abs();
+                    let (p, q) = if dif_h <= dif_v { (izq, der) } else { (arr, aba) };
+                    let (cp, cq) = (fuente[p], fuente[q]);
+                    let medio = |u: u8, v: u8| ((u as u16 + v as u16) / 2) as u8;
+                    fila[x] = Color::new(medio(cp.r, cq.r), medio(cp.g, cq.g), medio(cp.b, cq.b), 255);
+                    fila_prof[x] = prof[p].min(prof[q]);
                 }
-                let i = y * w + x;
-                // En el borde de la imagen falta un vecino: se repite el otro.
-                let izq = if x > 0 { i - 1 } else { i + 1 };
-                let der = if x + 1 < w { i + 1 } else { i - 1 };
-                let arr = if y > 0 { i - w } else { i + w };
-                let aba = if y + 1 < h { i + w } else { i - w };
-                let (b, d) = (&self.buffer, &self.depth);
-                let dif_h = (luz(b[izq]) - luz(b[der])).abs();
-                let dif_v = (luz(b[arr]) - luz(b[aba])).abs();
-                let (p, q) = if dif_h <= dif_v { (izq, der) } else { (arr, aba) };
-                let (cp, cq) = (b[p], b[q]);
-                let medio = |u: u8, v: u8| ((u as u16 + v as u16) / 2) as u8;
-                let profundidad = d[p].min(d[q]);
-                self.buffer[i] = Color::new(medio(cp.r, cq.r), medio(cp.g, cq.g), medio(cp.b, cq.b), 255);
-                self.depth[i] = profundidad;
-            }
-        }
+            });
     }
 
     pub fn clear(&mut self) {

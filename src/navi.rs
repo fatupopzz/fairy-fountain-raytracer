@@ -170,16 +170,20 @@ impl NaviViva {
         // encima (acelera y frena), el radio respira y la altura sube y baja
         // al doble de frecuencia. Es la trayectoria nerviosa de un hada, y no
         // se repite igual nunca porque los periodos no se dividen.
-        let centro = link.cabeza(p) + Vec3::new(0.0, 0.22, 0.0);
+        // Cuando la camara esta encima de Link (los primeros planos, el del
+        // corazon) Navi se abre y sube, y brilla menos: pasaba justo delante
+        // de la cara y su luz la quemaba, y no se veia ni el parpadeo.
+        let enfoque = crate::plano_en(t).3.clamp(0.0, 1.0);
+        let centro = link.cabeza(p) + Vec3::new(0.0, 0.22 + 0.30 * enfoque, 0.0);
         let angulo = t * 1.6 + (t * 0.53).sin() * 1.4;
-        let radio = 0.52 + 0.14 * (t * 1.07).sin();
+        let radio = 0.52 + 0.14 * (t * 1.07).sin() + 0.45 * enfoque;
         let alto = 0.12 * (t * 2.3).sin() + 0.06 * (t * 5.1).sin();
         let pos = |a: f32, r: f32, h: f32| centro + Vec3::new(a.cos() * r, h, a.sin() * r);
         let aqui = pos(angulo, radio, alto);
         let adelante = normalize(&(pos(angulo + 0.05, radio, alto) - aqui));
 
         // Late con el tiempo fuerte.
-        let brillo = 0.75 + 0.45 * p.pulso + 0.25 * p.swell;
+        let brillo = (0.75 + 0.45 * p.pulso + 0.25 * p.swell) * (1.0 - 0.5 * enfoque);
         let c = |x: f32| (x * brillo).clamp(0.0, 255.0) as u8;
 
         if let Some(g) = objetos
@@ -223,7 +227,7 @@ impl NaviViva {
 
         if let Some(luz) = luces.get_mut(self.luz) {
             luz.position = aqui;
-            luz.intensity = 0.8 + 0.6 * p.pulso;
+            luz.intensity = (0.8 + 0.6 * p.pulso) * (1.0 - 0.6 * enfoque);
         }
 
         // ---- LAS NOTAS ----

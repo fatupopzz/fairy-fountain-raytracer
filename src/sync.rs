@@ -1484,7 +1484,7 @@ impl SyncData {
                 + hacia_uno * 0.18
                 + self.cine(t) * 0.28)
                 * (0.40 + 0.60 * noche))
-                .min(1.05),
+                .min(0.95),
             // No esta en el guion. Se ata al bass igual que la fuerza del
             // bloom porque las dos describen el mismo halo: si el brillo
             // crece y el radio no, el bloom se ve como un recorte duro.

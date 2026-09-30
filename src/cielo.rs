@@ -39,6 +39,13 @@ const ALTO: usize = 512;
 /// borde de roca del fondo y del techo de la fuente.
 pub const LUNA_DIRECCION: Vec3 = Vec3::new(-0.28, 0.19, -0.94);
 
+/// EL SOL de los amaneceres (se normaliza al usarlo), en el cielo sin girar:
+/// pegado al mar de nubes y justo donde mira la camara en los planos
+/// abiertos del principio (hacia los 15 s) y del final (hacia los 178):
+/// azimut 3.1 en el cielo que gira, que con el giro de la noche y la vuelta
+/// de la camara cae cerca del centro del cuadro en los dos amaneceres.
+pub const SOL_DIRECCION: Vec3 = Vec3::new(-0.998, -0.02, 0.042);
+
 /// Suma de los tres canales a partir de la cual un texel del cielo se
 /// considera una estrella. La nebulosa mas encendida no pasa de 260 y el
 /// degrade de fondo anda por 60; una estrella arranca en 380.
@@ -504,6 +511,16 @@ impl Cielo {
     }
 
     /// Hacia donde esta la luna AHORA, con el giro del cielo aplicado.
+    /// Hacia donde esta el sol, en el mundo (gira con el cielo).
+    pub fn sol(&self) -> Vec3 {
+        girar_y(&normalize(&SOL_DIRECCION), self.giro)
+    }
+
+    /// Cuanto amanecio, de 0 a 1. Lo usa el destello de lente.
+    pub fn amanecer(&self) -> f32 {
+        self.amanecer
+    }
+
     pub fn luna(&self) -> Vec3 {
         girar_y(&normalize(&LUNA_DIRECCION), self.giro)
     }
@@ -706,6 +723,15 @@ impl Cielo {
             noche = Color::new(suma(noche.r, 255.0), suma(noche.g, 170.0), suma(noche.b, 245.0), 255);
         }
 
+        // EL COMETA, encima de la aurora: gira con las estrellas (esta en el
+        // cielo girado) y se apaga con el dia.
+        let cometa = self.cometa(&d);
+        let de_noche = (1.0 - self.amanecer).max(0.0);
+        if cometa.3 > 0.0 && de_noche > 0.0 {
+            let suma = |base: u8, c: f32| (base as f32 + c * de_noche).min(255.0) as u8;
+            noche = Color::new(suma(noche.r, cometa.0), suma(noche.g, cometa.1), suma(noche.b, cometa.2), 255);
+        }
+
         // LAS ESTRELLAS FUGACES, sumadas encima de todo.
         //
         // Se apagan con la luz del dia: una estrella fugaz a plena luz no
@@ -797,11 +823,90 @@ impl Cielo {
         g = canal(g, 110.0, 75.0) as f32;
         b = canal(b, 150.0, 20.0) as f32;
 
-        con_fugaz(nublar(Color::new(r as u8, g as u8, b as u8, 255)))
+        // --- Capa 3: EL SOL ---
+        // Un disco casi blanco y calido, un resplandor dorado alrededor y un
+        // halo ancho que tine el cielo de oro, como el sol bajo de los
+        // atardeceres del juego. Va encima de las nubes: esta sobre ellas.
+        let al_sol = d.dot(&normalize(&SOL_DIRECCION)).clamp(-1.0, 1.0).acos();
+        let disco = (1.0 - ((al_sol - 0.028) / 0.006).clamp(0.0, 1.0)) * 255.0;
+        let brillo = (-(al_sol / 0.09).powi(2)).exp() * 170.0 + (-al_sol / 0.45).exp() * 60.0;
+        let k = self.amanecer;
+        let sol = |c: Color| {
+            let suma = |base: u8, v: f32| (base as f32 + v * k).min(255.0) as u8;
+            Color::new(
+                suma(c.r, disco + brillo),
+                suma(c.g, disco * 0.95 + brillo * 0.78),
+                suma(c.b, disco * 0.80 + brillo * 0.42),
+                255,
+            )
+        };
+
+        con_fugaz(sol(nublar(Color::new(r as u8, g as u8, b as u8, 255))))
     }
 }
 
 impl Cielo {
+    /// LOS COMETAS: tres, repartidos alrededor del cielo para que mientras
+    /// la camara gira alrededor de la isla casi siempre haya uno a la vista
+    /// (la camara mira un poco hacia abajo y del cielo entra solo una
+    /// franja baja). Cada uno con una cabeza blanca y DOS colas, como los de
+    /// verdad: la de iones, recta y fina, y la de polvo, mas ancha y curvada,
+    /// cada cola de su color: el clasico (celeste y oro), el de las hadas
+    /// (rosa y violeta) y el de la aurora (turquesa y verde). Estan fijos en
+    /// el cielo de las estrellas (giran con la noche) y avanzan apenas por su
+    /// cuenta. Devuelve el color a sumar (r, g, b) y cuanto hay, para poder
+    /// saltearlo. Son un punado de productos punto por rayo de cielo.
+    fn cometa(&self, d: &Vec3) -> (f32, f32, f32, f32) {
+        // (azimut, elevacion, largo de la cola, color de iones, color de polvo)
+        type Cometa = (f32, f32, f32, (f32, f32, f32), (f32, f32, f32));
+        const COMETAS: [Cometa; 3] = [
+            (-2.35, 0.13, 0.45, (0.55, 0.80, 1.00), (1.00, 0.72, 0.62)),
+            (0.20, 0.11, 0.38, (0.95, 0.55, 1.00), (1.00, 0.55, 0.75)),
+            (2.10, 0.15, 0.32, (0.45, 1.00, 0.85), (0.70, 1.00, 0.55)),
+        ];
+        let avanza = self.tiempo * 0.0012;
+        let (mut r, mut g, mut b) = (0.0f32, 0.0f32, 0.0f32);
+        for &(az, elev, largo, iones_c, polvo_c) in &COMETAS {
+            let cabeza = direccion(az + avanza, elev + avanza * 0.2);
+            let cerca = d.dot(&cabeza);
+            if cerca < 0.80 {
+                continue;
+            }
+            // En el plano tangente a la cabeza: `v` es donde esta `d` visto
+            // desde la cabeza. La cola sale en diagonal, mas de costado que
+            // hacia arriba, para que entre en el cuadro.
+            let v = *d - cabeza * cerca;
+            let arriba = Vec3::new(0.0, 1.0, 0.0);
+            let lado = normalize(&cross(&cabeza, &arriba));
+            let eje = normalize(&(lado * 0.85 + (arriba - cabeza * cabeza.y) * 0.45));
+            let a_lo_largo = v.dot(&eje);
+            let de_costado = (v - eje * a_lo_largo).magnitude();
+            let angulo = v.magnitude();
+
+            // La cabeza y la coma.
+            let nucleo = (-(angulo / 0.010).powi(2)).exp() * 280.0 + (-(angulo / 0.05).powi(2)).exp() * 90.0;
+            r += nucleo;
+            g += nucleo;
+            b += nucleo * 1.05;
+
+            if a_lo_largo > 0.0 {
+                let desvanece = (-a_lo_largo / largo).exp();
+                let ancho = 0.010 + 0.07 * a_lo_largo;
+                let iones = (-(de_costado / ancho).powi(2)).exp() * desvanece * 170.0;
+                // La de polvo se curva hacia el costado a medida que se aleja.
+                let curva = (v - (eje * a_lo_largo + lado * (0.35 * a_lo_largo * a_lo_largo))).magnitude();
+                let ancho_polvo = 0.018 + 0.16 * a_lo_largo;
+                let polvo = (-(curva / ancho_polvo).powi(2)).exp() * desvanece * 140.0;
+                r += iones * iones_c.0 + polvo * polvo_c.0;
+                g += iones * iones_c.1 + polvo * polvo_c.1;
+                b += iones * iones_c.2 + polvo * polvo_c.2;
+            }
+        }
+        // Titilan apenas, como si respiraran.
+        let late = 0.9 + 0.1 * (self.tiempo * 1.7).sin();
+        (r * late, g * late, b * late, r + g + b)
+    }
+
     /// El cielo en `base`, con el mar de nubes encima si en esa direccion
     /// hay. `u` es la longitud (la misma del cielo) y `elevacion` la de la
     /// direccion, que aca siempre es baja.
@@ -1155,6 +1260,18 @@ mod tests {
             .collect();
         let (mas, menos) = (*por_azimut.iter().max().unwrap(), *por_azimut.iter().min().unwrap());
         assert!(mas > menos * 2, "la aurora esta pareja en todo el cielo: {menos} a {mas}");
+    }
+
+    #[test]
+    fn el_cometa_brilla_en_su_cabeza_y_no_lejos() {
+        let cielo = Cielo::generar();
+        let cabeza = direccion(-2.35, 0.13);
+        let (_, _, _, ahi) = cielo.cometa(&cabeza);
+        let (_, _, _, lejos) = cielo.cometa(&direccion(-1.0, 0.9));
+        eprintln!("cometa: cabeza {ahi}, lejos {lejos}");
+        assert!(ahi > 200.0 && lejos == 0.0);
+        let c = cielo.color(&cabeza);
+        eprintln!("color en la cabeza: {:?}", (c.r, c.g, c.b));
     }
 
     #[test]

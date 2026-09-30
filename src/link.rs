@@ -199,6 +199,9 @@ pub struct Pose {
     desplaza: f32,
     /// Hacia donde gira la cabeza, en radianes: mira a Navi, o a la fuente.
     mira_lado: f32,
+    /// Cuanto aprieta cada mano sobre la ocarina (0 a 1): con cada nota del
+    /// arpa, alternando las manos, un dedo baja.
+    pulsa: [f32; 2],
 }
 
 impl Pose {
@@ -219,8 +222,32 @@ impl Pose {
             toca: 1.0,
             desplaza: 0.0,
             mira_lado: 0.0,
+            pulsa: [0.0; 2],
         }
     }
+}
+
+/// SI ESTA PARPADEANDO en el segundo `t`. Un parpadeo dura 0.12 s y cae
+/// una vez por ventana de 3.3 s, en un momento al azar de la ventana (fijo:
+/// sale del numero de ventana), y una de cada cuatro veces es doble. Asi no
+/// parpadea con metronomo, que es lo que delata a un muneco. `semilla`
+/// separa a Link del hada, para que no parpadeen juntos.
+pub(crate) fn parpadea(t: f32, semilla: u32) -> bool {
+    const VENTANA: f32 = 3.3;
+    let n = (t / VENTANA).floor();
+    let h = ((n * 12.9898 + semilla as f32 * 78.233).sin() * 43758.547).fract().abs();
+    let dentro = t - (n * VENTANA + h * (VENTANA - 0.5));
+    (0.0..0.12).contains(&dentro) || (h > 0.75 && (0.22..0.33).contains(&dentro))
+}
+
+/// Ruido suave de un solo valor: interpola entre valores al azar puestos en
+/// cada entero. Es el temblor de alguien que nunca esta del todo quieto: a
+/// diferencia de un seno, no se repite.
+fn ruido(t: f32, semilla: u32) -> f32 {
+    let valor = |n: f32| ((n * 12.9898 + semilla as f32 * 4.1414).sin() * 43758.547).fract().abs() * 2.0 - 1.0;
+    let (n, f) = (t.floor(), t.fract());
+    let f = f * f * (3.0 - 2.0 * f);
+    valor(n) + (valor(n + 1.0) - valor(n)) * f
 }
 
 /// La pose que pide la cancion en este instante.
@@ -261,8 +288,10 @@ pub fn pose_de(p: &SceneParams) -> Pose {
     //     Navi con la mirada de vez en cuando;
     //   - cuando sale el hada baja la ocarina y la mira, asombrado, un poco
     //     echado atras (despues vienen la bendicion y el Fuego de Din);
-    //   - en la coda vuelve a tocar, suave, y al final baja la ocarina y mira
-    //     el cielo.
+    //   - en la coda vuelve a tocar, suave; le llega el Contenedor de
+    //     Corazon y lo LEVANTA sobre la cabeza con los dos brazos, la pose
+    //     de "obtuviste un objeto" del juego (ver `corazon.rs`); y al final
+    //     baja los brazos y mira el cielo.
     let t = p.tiempo;
     let suave = |x: f32| {
         let x = x.clamp(0.0, 1.0);
@@ -272,7 +301,8 @@ pub fn pose_de(p: &SceneParams) -> Pose {
     let calma = 1.0 - suave((t - 36.0) / 4.0);
     let sentimiento = tramo(38.0, 92.0);
     let crece = tramo(88.0, 124.0);
-    let final_ = suave((t - 173.0) / 3.0);
+    let final_ = suave((t - (crate::corazon::SE_VA + 1.0)) / 2.0);
+    let alza = suave((t - (crate::corazon::LLEGA - 0.6)) / 0.6) * (1.0 - suave((t - crate::corazon::SE_VA) / 1.0));
     let swell = p.swell.clamp(0.0, 1.0);
     let bendicion = p.bendicion.clamp(0.0, 1.0);
     // Mientras el hada esta afuera (y antes de la bendicion) la mira.
@@ -281,28 +311,42 @@ pub fn pose_de(p: &SceneParams) -> Pose {
     // Cada tanto mira a Navi, que le da vueltas: una mirada que va y vuelve.
     let ojeada = (t * 0.45).sin().max(0.0).powi(3) * if (t * 0.13).sin() > 0.0 { 1.0 } else { -1.0 };
     let compas2 = p.beat_period.max(0.2) * 8.0;
+    // LOS DEDOS: la ultima nota del arpa hunde un poco una mano sobre la
+    // ocarina (las pares la izquierda, las impares la derecha) y la suelta
+    // en un décimo de segundo.
+    let mut pulsa = [0.0f32; 2];
+    if let Some(&(n, cuando)) = p.ataques.iter().filter(|(_, c)| *c <= t).max_by(|a, b| a.1.total_cmp(&b.1)) {
+        pulsa[n % 2] = (-(t - cuando) / 0.10).exp();
+    }
+    // EL TEMBLOR DE ESTAR VIVO: ruido lento en la cabeza y el torso, encima de
+    // todos los vaivenes regulares.
+    let vivo = [ruido(t * 0.9, 1) * 0.025, ruido(t * 0.7, 2) * 0.03, ruido(t * 0.5, 3) * 0.04];
+    // Recibiendo la bendicion o levantando el corazon se queda FIRME: el
+    // vaiven de lado a lado, con los brazos arriba, se veia raro.
+    let firme = 1.0 - bendicion.max(alza);
     Pose {
-        balanceo: fase.sin() * vaiven * (1.0 - azota) * (1.0 - 0.5 * asombro),
+        balanceo: (fase.sin() * vaiven * (1.0 - azota) * (1.0 - 0.5 * asombro) + vivo[0]) * firme,
         inclinacion: 0.06 + 0.05 * energia + 0.06 * swell * (1.0 - sentimiento) - 0.08 * swell * sentimiento
             - 0.10 * asombro
             + 0.45 * azota,
-        asiente: p.pulso * 0.09 - 0.02 + 0.08 * calma - mira - 0.3 * prepara * (1.0 - azota) + 0.25 * azota
+        asiente: p.pulso * 0.09 - 0.02 + vivo[1] + 0.08 * calma - mira - 0.3 * prepara * (1.0 - azota) + 0.25 * azota
             - 0.45 * final_,
         respira: (t * 1.4).sin() * 0.008 * (1.0 + 2.0 * asombro),
         gorro_arriba: 0.10 * p.pulso + 0.05 * swell + 0.35 * azota,
-        gorro_lado: -(fase - PI / 2.0).sin() * vaiven * 2.2,
+        gorro_lado: -(fase - PI / 2.0).sin() * vaiven * 2.2 * (0.3 + 0.7 * firme),
         tiempo: t,
-        recibe: bendicion,
+        recibe: bendicion.max(alza),
         // Marca el tiempo con las rodillas (mas cuando la cancion crece), y
         // se agacha para el hechizo.
         baja: (0.02 + 0.03 * crece) * p.pulso + 0.015 * swell + 0.06 * prepara + 0.15 * azota,
         // Y el torso acompana el vaiven, a contratiempo de la cadera.
-        gira: (fase * 0.5).sin() * (0.05 + 0.08 * energia) * (1.0 - prepara),
+        gira: (fase * 0.5).sin() * (0.05 + 0.08 * energia) * (1.0 - prepara) * firme,
         prepara,
         azota,
         toca: 1.0 - asombro.max(final_),
-        desplaza: 0.05 * (t / compas2 * 2.0 * PI).sin() * (sentimiento + 0.5 * crece) * (1.0 - asombro),
-        mira_lado: 0.45 * ojeada * crece + 0.15 * (t * 0.23).sin() * sentimiento,
+        desplaza: 0.05 * (t / compas2 * 2.0 * PI).sin() * (sentimiento + 0.5 * crece) * (1.0 - asombro) * firme,
+        mira_lado: 0.45 * ojeada * crece + 0.15 * (t * 0.23).sin() * sentimiento + vivo[2],
+        pulsa,
     }
 }
 
@@ -502,7 +546,8 @@ fn piezas(pose: &Pose) -> (Vec<Pieza>, Vec<usize>) {
         let hombro = torso.punto(Vec3::new(lado * 0.215, 0.43, 0.0));
         // Tocando, las manos van a los extremos de la ocarina; recibiendo la
         // bendicion, arriba de la cabeza, abiertas hacia el hada.
-        let en_ocarina = ocarina.punto(Vec3::new(lado * 0.085, -0.02, 0.0));
+        let aprieta = pose.pulsa[if lado < 0.0 { 0 } else { 1 }] * pose.toca;
+        let en_ocarina = ocarina.punto(Vec3::new(lado * 0.085, -0.02 - 0.018 * aprieta, 0.012 * aprieta));
         let arriba = torso.punto(Vec3::new(lado * 0.2, 0.88, 0.10));
         let mano = en_ocarina + (arriba - en_ocarina) * pose.recibe;
         // El Fuego de Din: los dos punos arriba, y el izquierdo (+X, Link
@@ -580,10 +625,13 @@ fn piezas(pose: &Pose) -> (Vec<Pieza>, Vec<usize>) {
 pub struct LinkVivo {
     pub grupo: usize,
     ocarina: usize,
+    /// La caja de la cara y sus dos frentes: ojos abiertos y cerrados.
+    cara: usize,
+    caras: [Material; 2],
 }
 
 /// Los materiales, en el orden de `M`.
-fn materiales() -> (Vec<Material>, Material, Material, Material) {
+fn materiales() -> (Vec<Material>, [Material; 2], Material, Material) {
     let tela = |base: [f32; 3], semilla: u32| {
         let ruido = campo_fbm(128, 6, 4, semilla);
         TextureImage::pintada(128, 128, move |u, v| {
@@ -681,7 +729,8 @@ fn materiales() -> (Vec<Material>, Material, Material, Material) {
         None,
     );
 
-    let cara = Material::new([1.0, 0.18, 0.0, 0.0], 20.0, 0.0, img(textura_cara()), None);
+    let cara = Material::new([1.0, 0.18, 0.0, 0.0], 20.0, 0.0, img(textura_cara(false)), None);
+    let cara_cerrada = Material::new([1.0, 0.18, 0.0, 0.0], 20.0, 0.0, img(textura_cara(true)), None);
     let escudo = Material::new([1.0, 0.7, 0.25, 0.0], 60.0, 0.0, img(textura_escudo()), None)
         .con_rugosidad(0.10);
     let escudo_punta =
@@ -689,15 +738,19 @@ fn materiales() -> (Vec<Material>, Material, Material, Material) {
 
     (
         vec![tunica, piel, pelo, blanco, cuero, cuero_oscuro, oro, acero, ocarina, empunadura, vaina],
-        cara,
+        [cara, cara_cerrada],
         escudo,
         escudo_punta,
     )
 }
 
 /// La cara de Link: ojos azules almendrados, cejas rubias, la boca.
-fn textura_cara() -> TextureImage {
-    TextureImage::pintada(128, 128, |u, v| {
+///
+/// Con `cerrados`, los ojos cerrados: la linea del parpado, curva hacia
+/// abajo, en lugar de la almendra. Es la cara del parpadeo (ver
+/// `parpadea`).
+fn textura_cara(cerrados: bool) -> TextureImage {
+    TextureImage::pintada(128, 128, move |u, v| {
         let piel = [1.0, 0.78, 0.62];
         // Sombreado hacia los costados: la cabeza es una caja, y sin esto
         // la cara se lee como una etiqueta pegada.
@@ -718,7 +771,12 @@ fn textura_cara() -> TextureImage {
             // Almendra: el borde de afuera sube un poco, como el ojo de Link.
             let dy = dy + dx * s * 0.25;
             let r = dx * dx + dy * dy;
-            if r < 1.0 {
+            if cerrados {
+                // El parpado cerrado: una linea que baja en el medio.
+                if dx.abs() < 1.0 && (dy - 0.35 * (1.0 - dx * dx)).abs() < 0.28 {
+                    c = [0.30, 0.18, 0.12];
+                }
+            } else if r < 1.0 {
                 c = [0.96, 0.96, 0.92];
                 let (ix, iy) = ((u - cx + s * 0.012) / 0.05, (v - 0.505) / 0.058);
                 let ri = ix * ix + iy * iy;
@@ -829,14 +887,15 @@ fn textura_escudo_punta() -> TextureImage {
 /// Arma a Link y lo agrega a la escena. Devuelve lo que la animacion
 /// necesita para moverlo.
 pub fn armar(objetos: &mut Vec<Box<dyn RayIntersect + Send + Sync>>) -> LinkVivo {
-    let (mats, cara, escudo, escudo_punta) = materiales();
+    let (mats, caras, escudo, escudo_punta) = materiales();
     let (todas, cortes) = piezas(&Pose::quieta());
     let ocarina = todas.iter().position(|p| matches!(p.mat, M::Ocarina)).unwrap_or(usize::MAX);
+    let cara = todas.iter().position(|p| matches!(p.frente, Some(Frente::Cara))).unwrap_or(usize::MAX);
     let mut cajas = todas.iter().map(|p| {
         let mut caja = CajaOrientada::nueva(p.centro, p.tam, p.ejes, mats[p.mat as usize].clone());
         if let Some(f) = p.frente {
             caja = caja.con_frente(match f {
-                Frente::Cara => cara.clone(),
+                Frente::Cara => caras[0].clone(),
                 Frente::Escudo => escudo.clone(),
                 Frente::EscudoPunta => escudo_punta.clone(),
             });
@@ -856,7 +915,7 @@ pub fn armar(objetos: &mut Vec<Box<dyn RayIntersect + Send + Sync>>) -> LinkVivo
     let grupo = objetos.len();
     // El margen cubre lo que se mueve: el balanceo y el gorro.
     objetos.push(Box::new(GrupoAcotado::con_margen(partes, 0.25)));
-    LinkVivo { grupo, ocarina }
+    LinkVivo { grupo, ocarina, cara, caras }
 }
 
 impl LinkVivo {
@@ -880,6 +939,10 @@ impl LinkVivo {
                 if let Some(caja) = (hijo.as_mut() as &mut dyn Any).downcast_mut::<CajaOrientada>() {
                     caja.colocar(pieza.centro, pieza.ejes);
                     caja.medio = pieza.tam * 0.5;
+                    if i == self.cara {
+                        let cerrados = parpadea(p.tiempo, 3) as usize;
+                        caja.frente = Some(self.caras[cerrados].clone());
+                    }
                     if i == self.ocarina {
                         // La ocarina se enciende con lo que suena.
                         let k = nota.clamp(0.0, 1.0);

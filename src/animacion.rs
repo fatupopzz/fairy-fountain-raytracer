@@ -89,6 +89,10 @@ pub struct EscenaViva {
     haces: Vec<(usize, usize, Color)>,
     /// El Fuego de Din. Ver `fuego_de_din.rs`.
     fuego: Option<crate::fuego_de_din::FuegoDeDin>,
+    /// El Contenedor de Corazon del final. Ver `corazon.rs`.
+    corazon: Option<crate::corazon::Corazon>,
+    /// Las mariposas del pasto. Ver `mariposas.rs`.
+    mariposas: Option<crate::mariposas::Mariposas>,
 }
 
 /// Una rupia que gira sobre su eje y flota.
@@ -122,6 +126,8 @@ impl EscenaViva {
             fuente: None,
             haces: Vec::new(),
             fuego: None,
+            corazon: None,
+            mariposas: None,
         }
     }
 
@@ -207,6 +213,14 @@ impl EscenaViva {
 
     pub fn registrar_haz(&mut self, grupo: usize, region: usize, color: Color) {
         self.haces.push((grupo, region, color));
+    }
+
+    pub fn registrar_mariposas(&mut self, mariposas: crate::mariposas::Mariposas) {
+        self.mariposas = Some(mariposas);
+    }
+
+    pub fn registrar_corazon(&mut self, corazon: crate::corazon::Corazon) {
+        self.corazon = Some(corazon);
     }
 
     pub fn registrar_fuego(&mut self, fuego: crate::fuego_de_din::FuegoDeDin) {
@@ -902,7 +916,18 @@ pub fn actualizar_escena(
             .and_then(|o| (o.as_mut() as &mut dyn Any).downcast_mut::<GrupoAcotado>());
         if let Some(g) = g {
             let factor = 0.7 + params.pulso * 0.6;
+            // Y cada nota de la ocarina enciende UNO de los tres triangulos,
+            // rotando (Poder, Sabiduria, Valor): Link despierta la Trifuerza
+            // al tocar.
+            let mut nota = [0.0f32; 3];
+            for &(n, t0) in &params.ataques {
+                let edad = params.tiempo - t0;
+                if edad >= 0.0 {
+                    nota[n % 3] = nota[n % 3].max((-edad / 0.3).exp());
+                }
+            }
             for (hijo, base) in hijos {
+                let factor = factor + 1.3 * nota[*hijo % 3];
                 if let Some(t) = g
                     .children_mut()
                     .get_mut(*hijo)
@@ -1096,6 +1121,12 @@ pub fn actualizar_escena(
     }
     if let Some(fuego) = &escena.fuego {
         fuego.actualizar(objetos, luces, params);
+    }
+    if let Some(mariposas) = &escena.mariposas {
+        mariposas.actualizar(objetos, params);
+    }
+    if let Some(corazon) = &escena.corazon {
+        corazon.actualizar(objetos, luces, params);
     }
     if let (Some(navi), Some(link)) = (&escena.navi, &escena.link) {
         navi.actualizar(objetos, luces, link, params);

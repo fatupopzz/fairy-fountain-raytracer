@@ -8,13 +8,17 @@ el piso** donde Link se para a tocar, un estrado en terrazas con el cuenco del
 hada dentro de una flor de loto, dos **antorchas de cono** con fuego naranja, y
 una **lluvia de brillos** cayendo alrededor de la fuente.
 
-Parado sobre la Trifuerza, **Link** —hecho de cubos— toca la Ocarina del
-Tiempo mientras **Navi** le da vueltas a la cabeza. Cuando entran las voces, la
-**Gran Hada** sale del cuenco dando una voltereta entre halos de luz, baila en
-el aire, **bendice a Link** con dos haces dorados que bajan de sus manos a las de él
-para recibir el poder, se zambulle, y en el golpe siguiente Link estrena el
-**Fuego de Din**. Todo bajo una **aurora boreal** que se retuerce, pulsa y
-cambia de color con la canción.
+Abre con el **logo de *Ocarina of Time*** sobre la isla y **Navi** volando
+alrededor, como la pantalla de título del juego. Parado sobre la Trifuerza,
+**Link** —hecho de cubos— toca la Ocarina del Tiempo (cada nota enciende uno de
+los tres triángulos de la Trifuerza del piso) mientras Navi le da vueltas a la
+cabeza. Cuando entran las voces, la **Gran Hada** sale del cuenco dando una
+voltereta entre halos de luz, baila en el aire, **bendice a Link** con dos
+una lluvia de polvo de hada dorado que baja de sus manos a las de él, se zambulle, y en el golpe
+siguiente Link estrena el **Fuego de Din**. Al final le llega un
+**Contenedor de Corazón** y Link lo **levanta sobre la cabeza**, la pose de
+"obtuviste un objeto". Todo bajo una **aurora boreal** que se retuerce, pulsa y
+cambia de color con la canción, con mariposas entre las flores de la isla.
 
 No hay motor 3D: la geometría, la iluminación, las sombras, los reflejos, el
 modelo de Link y el cielo son código propio. Lo único que aporta raylib es la
@@ -29,10 +33,10 @@ Ni matemática de vectores, ni intersecciones, ni BVH, ni sombreado.
 **[▶ Ver el video en YouTube (1080p)](https://youtu.be/aDA3A-uqBSQ)** — la
 canción entera, en **1440×1080**, grabada con `--video`.
 
-[![La Gran Hada bendiciendo a Link](docs/portada.jpg)](https://youtu.be/aDA3A-uqBSQ)
+[![El título de Ocarina of Time sobre la isla](docs/portada.jpg)](https://youtu.be/aDA3A-uqBSQ)
 
 También está en el repo, comprimido: [docs/fuente_de_las_hadas.mp4](docs/fuente_de_las_hadas.mp4)
-(59 MB; la versión en alta calidad, de 268 MB, se regenera con el mismo
+(62 MB; la versión en alta calidad, de 277 MB, se regenera con el mismo
 comando y no va al repo).
 
 ---
@@ -59,6 +63,8 @@ shaders y la música son relativas a ahí.
 | ratón | arrastrar para orbitar, rueda para acercar |
 | `X` | antialiasing 2×2 (cuadruplica el costo) |
 | `T` | antialiasing temporal (gratis, viene encendido) |
+| `G` | regulador: fluidez (encendido) o calidad máxima (apagado) |
+| `R` | reproyección: la cámara se ve a 60 cuadros por segundo (apagada por defecto) |
 | `F` | guardar una foto del cuadro en pantalla |
 | `H` | mostrar u ocultar la ayuda |
 
@@ -92,7 +98,7 @@ segundos mide `--bench`, y `CAMARA=x,y,z,mx,my,mz` fija la cámara en `--foto`.
 
 | | |
 |---|---|
-| **Escena compleja** | Isla flotante de bloques con cascadas, cristales colgantes, islotes, flores, arbustos, cristalitos y pasto que cuelga por los bordes; la fuente de Ocarina con piscina hexagonal, pasillo, Trifuerza en el piso, estrado hexagonal en terrazas, flor de loto, antorchas de cono, seis columnas y techo; tres halos toroidales; Link articulado de ~50 cubos con cinemática inversa; la Gran Hada articulada; Navi; notas; haces de cristal; los haces de la bendición; el Fuego de Din; lluvia de 150 brillos; ~50 hadas y motas; rupias; skybox con aurora y mar de nubes. 264 objetos, 12 luces de color. |
+| **Escena compleja** | Isla flotante de bloques con cascadas, cristales colgantes, islotes, flores, arbustos, cristalitos y pasto que cuelga por los bordes; la fuente de Ocarina con piscina hexagonal, pasillo, Trifuerza en el piso, estrado hexagonal en terrazas, flor de loto, antorchas de cono, seis columnas y techo; tres halos toroidales; Link articulado de ~50 cubos con cinemática inversa (y parpadea); la Gran Hada articulada (y parpadea); Navi; ocho mariposas; el Contenedor de Corazón de 27 vóxeles; el logo del título; notas; haces de cristal; el polvo de hada de la bendición; tres cometas; el Fuego de Din; lluvia de 150 brillos; ~50 hadas y motas; rupias; skybox con aurora y mar de nubes. 273 objetos, 12 luces de color. |
 | **Rotación y zoom** | La cámara orbita 360° alrededor de la isla (una vuelta cada 96 s) y se acerca y aleja con el programa de planos; teclado y ratón suman giro, altura y distancia. |
 | **Materiales** (cada uno con su textura y sus pesos de albedo, especular, reflexión y transparencia) | Ver la tabla de abajo: son más de diez. |
 | **Refracción** | El agua de la piscina y de las cascadas (1.33), los cristales (1.5), las rupias (1.6). Con Fresnel: el agua es espejo mirada de costado y transparente mirada de frente. |
@@ -210,12 +216,13 @@ cuatro tiempos (`src/hada_mayor.rs`):
    hombros sacudiéndose, como en el juego, le tiende la mano a Link, junta las
    manos para reunir el poder.
 3. **Bendice a Link**: abre los brazos en cruz y avanza por encima de él. En
-   cada mano se enciende una esfera de luz y de **cada mano baja un haz
-   dorado** —núcleo fino y halo ancho, respirando— hasta la mano levantada de
-   Link del mismo lado; las chispas bajan por los haces girando en espiral.
-   Los haces siguen a las manos durante toda la coreografía (la cruz, el
-   aleteo, las manos ofrecidas). Link guarda la ocarina y levanta los brazos
-   bajo una luz dorada.
+   cada mano se enciende una esfera de luz y de cada mano baja una **lluvia
+   de polvo de hada dorado**: cuarenta chispas en espirales anchas y sueltas,
+   cada una a su distancia del eje, titilando, hasta la mano levantada de
+   Link del mismo lado. (Hubo haces sólidos de las manos a Link, pero se leían
+   como rayos láser.) El polvo sigue a las manos durante toda la coreografía.
+   Link guarda la ocarina y levanta los brazos bajo una luz dorada, **firme**:
+   mientras recibe el poder deja de mecerse.
 4. **Se zambulle** girando en el cuenco, con una salpicadura de chispas, y en el
    primer tiempo fuerte siguiente Link lanza el **Fuego de Din**
    (`src/fuego_de_din.rs`), como en el juego: sobre el cuenco aparece el
@@ -285,6 +292,19 @@ noche.
   cuatro cristales de las esquinas dispara un haz de luz hacia lo alto, sobre
   la fuente, y se enciende entero; en el compás siguiente dispara el próximo,
   así la luz da la vuelta a la isla al ritmo del tema.
+- **El sol de los amaneceres**, como en los atardeceres del juego: sale sobre
+  el mar de nubes al principio del tema, con un disco cálido, un resplandor
+  dorado y un halo que tiñe el cielo; mientras hay amanecer los **rayos de
+  luz salen de él**, y la lente **destella**: discos de colores sobre la línea
+  que va del sol al centro del cuadro y un arco de arco iris del otro lado, que
+  se apagan si algo tapa el sol (se mide con la profundidad) o si el sol sale
+  de cuadro.
+- **Tres cometas** (`Cielo::cometa`), cada uno con una cabeza blanca y dos
+  colas como los de verdad: la de iones, recta y fina, y la de polvo, más
+  ancha y curvada, cada cola de su color: el clásico (celeste y oro), el de
+  las hadas (rosa y violeta) y el de la aurora (turquesa y verde). Giran con
+  la noche y están repartidos alrededor del cielo para que, mientras la
+  cámara da la vuelta a la isla, casi siempre haya uno a la vista.
 - **La aurora boreal** asoma desde el atardecer y las voces la llevan a pleno.
   Son dos cortinas con el borde de abajo nítido y la cola deshilachada hacia
   arriba, rayos verticales que se corren solos y pliegues, y además **toca la
@@ -303,6 +323,32 @@ noche.
   toroidales destellan, las hadas se deshacen con el arpa, estrellas fugaces y
   estelas cruzan en los tiempos fuertes, y el bloom, la niebla y los haces de
   luz respiran con la canción.
+
+### El título y el final
+
+- **El título** (`dibujar_titulo` en `src/main.rs`): el logo de *Ocarina of
+  Time* entra en los primeros segundos, con un resplandor claro detrás de las
+  letras, destella con cada nota del arpa, y Navi vuela alrededor en un ocho
+  con su estela de chispas. Va dibujado encima de todo el post-procesado, en
+  la GPU.
+- **El Contenedor de Corazón** (`src/corazon.rs`): después del Fuego de Din
+  aparece girando sobre el cuenco, baja flotando en arco hasta Link, y Link lo
+  levanta con los dos brazos (la misma cinemática inversa de la bendición)
+  mientras la cámara pasa a un primer plano de frente; después se deshace en
+  luz y Link mira el cielo.
+
+### Vida
+
+- **Parpadean**: Link y el hada cierran los ojos 0.12 s una vez cada ~3 s en
+  un momento al azar de la ventana (a veces dos veces seguidas), y el hada
+  cierra los ojos en arco cuando se ríe. Es el detalle que más separa a un
+  personaje de un muñeco.
+- **Los dedos de Link tocan las notas**: con cada nota del arpa una mano se
+  hunde sobre la ocarina, alternando manos.
+- **Nunca está quieto**: encima de los vaivenes regulares, la cabeza y el
+  torso llevan un ruido lento que no se repite.
+- **Mariposas** (`src/mariposas.rs`) de cuatro colores dan vueltas sobre el
+  pasto, aletean, planean de a ratos y brillan apenas de noche.
 
 ### La cámara
 
@@ -390,8 +436,8 @@ Din cae a los 152.5.
 - Profundidad de campo, estelas anamórficas, aberración cromática, viñeta,
   grano y cierre a formato ancho.
 - **CAS** (realce adaptativo por contraste) para recuperar el filo que pierde
-  el estirado del cuadro trazado a la pantalla, junto con el reescalado
-  bicúbico.
+  el estirado del cuadro trazado a la pantalla, junto con el reescalado que
+  sigue los bordes (ver Rendimiento).
 
 ### La sincronización
 
@@ -431,7 +477,7 @@ mínimo de cinco pasadas por momento):
 | Peor plano | 44 ms (segundo 160) | ~44 ms (la bendición, de cerca) |
 | El Fuego de Din (cúpula sobre toda la fuente) | — | 37 ms |
 
-Y eso con la escena **casi ocho veces más grande** (de 34 a 264 objetos, de 8 a 12
+Y eso con la escena **casi ocho veces más grande** (de 34 a 273 objetos, de 8 a 12
 luces). Las notebooks sin ventilador varían un 30% según la temperatura, así
 que las decisiones se tomaron **contando instrucciones ejecutadas**
 (`/usr/bin/time -l`), que no dependen del calor. Con el perfilador de macOS
@@ -491,6 +537,76 @@ el que lo cruza, para que las columnas no queden en zigzag. La mitad de los
 rayos por casi la misma imagen: el cuadro baja de ~36 ms a **~21 ms (46 por
 segundo)** sin perder definición. `SIN_TABLERO=1` lo apaga y `SIN_PARALELO=1`
 apaga el paralelismo, para comparar.
+
+Y lo último que quedaba en serie: mover la escena (2–3 ms en un solo hilo)
+esperaba al acumulador temporal, y el acumulador a la escena, con los núcleos
+parados. Ahora el acumulador del cuadro anterior corre en los núcleos
+**mientras** el hilo principal mueve la escena del nuevo (tocan datos
+distintos), y el relleno del tablero va en paralelo por filas. Con todo lo que
+se sumó después (el corazón, las mariposas, el título) el cuadro queda en
+**~22 ms, unos 45 por segundo**.
+
+### Que no se caiga en la presentación: el regulador
+
+Midiendo la canción entera en vivo (`PERFIL=1` imprime cada dos segundos el
+cuadro medio y el peor) apareció lo que un banco de cinco segundos no ve: la
+MacBook Air **no tiene ventilador**, y bajo carga sostenida baja la velocidad
+del procesador. El cuadro arrancaba en 22 ms y al minuto estaba en 45–55; la
+parte pesada del final (el hada, la bendición, el corazón de cerca) llegaba a
+80 ms. Mover la escena, que cuesta siempre lo mismo, pasaba de 3.0 a 4.6 ms:
+era el procesador, no la escena.
+
+La respuesta es la de las consolas, un **regulador con resolución dinámica**:
+un promedio corrido del cuadro entero y nueve niveles, de 560×420 con todo a
+320×240 con lo mínimo. Si el cuadro pasa del presupuesto (40 ms, 25 por
+segundo) baja un nivel; si sobra mucho, sube. Primero baja lo que menos se ve
+(un rayo de oclusión ambiental en vez de dos; dos rebotes en vez de tres; los
+reflejos sin sombra) y después la resolución, que es la palanca grande; el
+reescalado bicúbico disimula la diferencia. Cambiar de resolución cuesta un
+cuadro. Con el regulador, la canción entera en caliente queda casi toda entre
+22 y 30 ms, y el tramo más duro alrededor de 33. El HUD muestra el nivel. En
+foto y en video no actúa: ahí todo va a calidad completa. La tecla **G** lo
+apaga en vivo (vuelve de una a la calidad máxima), `SIN_REGULADOR=1` arranca
+con él apagado, y `PRESUPUESTO=40` le pide menos cuadros por segundo (25) a
+cambio de más calidad.
+
+### 60 cuadros en pantalla: la reproyección
+
+La idea del *timewarp* de los visores de realidad virtual, escrita acá desde
+cero (`resources/shaders/glsl330/reproyectar.fs`): mientras la CPU traza el
+cuadro siguiente, la GPU vuelve a dibujar el último cuadro trazado **movido a
+donde está la cámara en ese momento**, hasta 60 veces por segundo. La cámara
+es una función del segundo de la canción, así que en cada refresco se sabe
+exactamente dónde está. Es un mapeo hacia atrás: para cada píxel de la
+pantalla se busca de dónde viene en el cuadro viejo, armando el rayo con la
+cámara nueva, avanzándolo la distancia que el trazador dejó en el canal alfa
+y proyectándolo con la cámara vieja; como esa distancia es la del cuadro viejo
+se itera tres veces. El giro de la cámara alrededor de la isla, que es el
+movimiento que más se nota, se ve a 60; lo que se mueve por su cuenta (el
+hada, las chispas) sigue a la velocidad del trazado. **Cada imagen sigue
+siendo trazada con rayos**: esto solo la vuelve a mostrar desde donde está la
+cámara, y en el video y las fotos no se usa (ahí cada cuadro se traza entero).
+Por ahora arranca **apagada** (la `R` o `REPROYECCION=1` la prenden): el
+cuadro se filtra dos veces, al moverlo y al agrandarlo, y la imagen queda más
+blanda de lo que se quiere.
+
+Los redibujados son baratos a propósito: reusan el halo del último cuadro
+completo, hacen los rayos de luz con un tercio de las muestras, el
+caleidoscopio (apagado en todo el tema) ya no copia la pantalla entera, y hay
+un tope de 60 dibujados por segundo en total. Así la reproyección le cuesta al
+trazado un 15%, no la mitad.
+
+### El reescalado que sigue los bordes
+
+El cuadro trazado es de tres a cinco veces más chico que la pantalla retina.
+En vez de agrandarlo con un filtro parejo, `composite.fs` mira hacia dónde va
+el borde en cada punto (el gradiente de la luminancia en los texeles
+vecinos) y usa un Lanczos estirado a lo largo del borde y angostado a través
+de él: a lo largo promedia (la escalera desaparece), a través conserva el
+salto (el borde queda nítido). El resultado se recorta al rango de los cuatro
+texeles más cercanos para que no deje halo. Es la idea que popularizó el
+FSR 1 de AMD, escrita acá desde cero; se nota sobre todo cuando el regulador
+baja la resolución.
 
 Un detalle que costó encontrar: la primera versión era el **doble de lenta**.
 En macOS un hilo nace con la prioridad del que lo crea, y el grupo de hilos de

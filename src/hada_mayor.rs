@@ -457,10 +457,12 @@ pub struct HadaMayorViva {
     luz_link: usize,
     /// El rayo de la bendicion: de las manos del hada a Link.
     rayo: usize,
+    /// Los dos frentes de la cara: ojos abiertos y cerrados.
+    caras: [Material; 2],
 }
 
 /// Cuantas chispas hay.
-const CHISPAS: usize = 18;
+const CHISPAS: usize = 40;
 
 /// LA HIEDRA que la envuelve, como en el juego: tallos verde oscuro que
 /// suben ondulando, con hojitas amarillo verdosas alternadas a cada lado.
@@ -561,9 +563,12 @@ fn textura_botas() -> TextureImage {
 /// se hace con sombra en las esquinas de abajo). Se pinta en coordenadas
 /// corregidas por la proporcion de la cabeza, para que lo redondo salga
 /// redondo.
-fn textura_cara() -> TextureImage {
+///
+/// Con `cerrados`, los ojos cerrados en arco (^ ^), con la sombra roja
+/// igual: es la cara del parpadeo y la de la risa.
+fn textura_cara(cerrados: bool) -> TextureImage {
     const ASPECTO: f32 = 0.33 / 0.28;
-    TextureImage::pintada(256, 256, |u, v| {
+    TextureImage::pintada(256, 256, move |u, v| {
         let y = v * ASPECTO;
         let mezcla = |c: [f32; 3], d: [f32; 3], k: f32| {
             let k = k.clamp(0.0, 1.0);
@@ -591,7 +596,12 @@ fn textura_cara() -> TextureImage {
                 }
             }
             let x = (u - cx) / ancho * s;
-            if x.abs() < 1.0 {
+            if cerrados {
+                // El ojo cerrado: un arco de pestanas, alto en el medio.
+                if x.abs() < 1.0 && (y - (ojo_y + 0.012 - 0.030 * (1.0 - x * x))).abs() < 0.008 {
+                    c = [0.10, 0.03, 0.06];
+                }
+            } else if x.abs() < 1.0 {
                 let curva = (1.0 - x * x).max(0.0);
                 let arriba = ojo_y - alto * curva.powf(0.55) - 0.010 * x.max(0.0);
                 let abajo = ojo_y + alto * 0.75 * curva - 0.010 * x.max(0.0);
@@ -669,7 +679,8 @@ pub fn armar(objetos: &mut Vec<Box<dyn RayIntersect + Send + Sync>>, luces: &mut
         Material::new([1.0, 0.2, 0.0, 0.0], 20.0, 0.0, img(textura_botas()), None),
         Material::new([1.0, 0.5, 0.0, 0.0], 40.0, 0.0, img(textura_pelo(true)), Some(Color::new(80, 18, 22, 255))),
     ];
-    let cara = Material::new([0.9, 0.05, 0.0, 0.0], 12.0, 0.0, img(textura_cara()), Some(Color::new(10, 12, 4, 255)));
+    let cara = Material::new([0.9, 0.05, 0.0, 0.0], 12.0, 0.0, img(textura_cara(false)), Some(Color::new(10, 12, 4, 255)));
+    let cara_cerrada = Material::new([0.9, 0.05, 0.0, 0.0], 12.0, 0.0, img(textura_cara(true)), Some(Color::new(10, 12, 4, 255)));
 
     let reposo = Pose {
         tiempo: 0.0,
@@ -725,24 +736,18 @@ pub fn armar(objetos: &mut Vec<Box<dyn RayIntersect + Send + Sync>>, luces: &mut
         Light::new(crate::link::PIES + Vec3::new(0.0, 1.9, 0.6), Color::new(255, 215, 120, 255), 0.0)
             .con_alcance(1.2),
     );
-    // EL RAYO DE LA BENDICION: de CADA mano del hada baja un haz dorado a la
-    // mano levantada de Link del mismo lado, con un nucleo fino y un halo
-    // ancho (translucidos: suman su luz, no tapan), y en cada mano del hada
-    // una esfera de luz. Orden: nucleo 0, halo 0, nucleo 1, halo 1, luz de
-    // la mano 0, luz de la mano 1.
+    // LA LUZ DE LAS MANOS: en cada mano del hada, una esfera de luz dorada
+    // (translucida: suma su luz, no tapa). De ahi sale el polvo de hada de
+    // la bendicion (ver las chispas). Hubo haces solidos de las manos a Link,
+    // pero se leian como rayos laser: en el juego es una lluvia de luz.
     let velo = Material::new([0.0, 0.0, 0.0, 1.0], 1.0, 1.0, Texture::Solid(Color::WHITE), Some(Color::BLACK));
     let mut rayo_partes: Vec<Box<dyn RayIntersect + Send + Sync>> = Vec::new();
-    for _ in 0..4 {
-        let mut haz = crate::cylinder::CilindroOrientado::nuevo(FLOTA, FLOTA + Vec3::new(0.0, 0.1, 0.0), 0.0, 1.0, velo.clone());
-        haz.set_visible(false);
-        rayo_partes.push(Box::new(haz));
-    }
     for _ in 0..2 {
         rayo_partes.push(Box::new(crate::sphere::Sphere { center: FLOTA, radius: 0.0, material: velo.clone() }));
     }
     let rayo = objetos.len();
     objetos.push(Box::new(GrupoAcotado::new(rayo_partes)));
-    HadaMayorViva { grupo, luz, chispas, luz_link, rayo }
+    HadaMayorViva { grupo, luz, chispas, luz_link, rayo, caras: [cara, cara_cerrada] }
 }
 
 /// Las manos levantadas de Link, cada una emparejada con la mano del hada
@@ -826,6 +831,12 @@ impl HadaMayorViva {
                     c.colocar(al_mundo(pieza.centro), componer(&r, &pieza.ejes));
                     // Sin presencia, tamano cero: no existe para ningun rayo.
                     c.medio = if presencia > 0.005 { pieza.tam * (0.5 * escala) } else { Vec3::zeros() };
+                    if pieza.cara {
+                        // Parpadea a su ritmo (otro que el de Link), y cierra
+                        // los ojos cuando se rie fuerte, como en el juego.
+                        let cerrados = crate::link::parpadea(t, 7) || movimiento(p).risa > 0.8;
+                        c.frente = Some(self.caras[cerrados as usize].clone());
+                    }
                     if matches!(pieza.mat, H::Pelo) {
                         let k = 0.6 + 0.4 * p.pulso + 0.3 * p.bendicion;
                         c.material.emission_color =
@@ -867,21 +878,8 @@ impl HadaMayorViva {
         {
             let b = p.bendicion;
             for (i, hijo) in g.children_mut().iter_mut().enumerate() {
-                if let Some(c) = (hijo.as_mut() as &mut dyn Any).downcast_mut::<crate::cylinder::CilindroOrientado>() {
-                    c.set_visible(b > 0.05);
-                    if b > 0.05 {
-                        let mano = i / 2;
-                        let halo = i % 2 == 1;
-                        // El haz respira, cada mano a su tiempo.
-                        let respira = 0.85 + 0.15 * (t * 2.3 + mano as f32 * 1.9).sin();
-                        c.recolocar(destinos[mano], manos_hada[mano]);
-                        c.set_radio(if halo { 0.17 } else { 0.05 } * b * respira);
-                        let k = b * respira * if halo { 0.16 } else { 0.7 };
-                        c.material_mut().emission_color =
-                            Some(Color::new((255.0 * k) as u8, (215.0 * k) as u8, (130.0 * k) as u8, 255));
-                    }
-                } else if let Some(e) = (hijo.as_mut() as &mut dyn Any).downcast_mut::<crate::sphere::Sphere>() {
-                    let mano = i - 4;
+                if let Some(e) = (hijo.as_mut() as &mut dyn Any).downcast_mut::<crate::sphere::Sphere>() {
+                    let mano = i;
                     let late = 0.85 + 0.15 * (t * 3.1 + mano as f32).sin();
                     e.center = manos_hada[mano.min(1)];
                     e.radius = if b > 0.05 { 0.16 * b * late } else { 0.0 };
@@ -934,11 +932,14 @@ impl HadaMayorViva {
                 let eje = normalize(&(hasta - desde));
                 let a = normalize(&cross(&eje, &Vec3::new(0.0, 1.0, 0.0)));
                 let b = cross(&eje, &a);
-                let vuelta = s * 3.0 * PI + t * 4.0 + h(4) * 6.0;
-                let radio = 0.09 * (s * PI).sin();
+                let vuelta = s * 2.5 * PI + t * 3.0 + h(4) * 6.0;
+                // Una espiral ancha y suelta, cada chispa a su distancia del
+                // eje: polvo de hada que cae, no un chorro.
+                let radio = (0.10 + 0.14 * h(6)) * (s * PI).sin();
                 let pos = desde + (hasta - desde) * s + (a * vuelta.cos() + b * vuelta.sin()) * radio;
-                let brillo = (s * PI).sin();
-                (pos, 0.06 * brillo * p.bendicion, (255.0, 225.0, 150.0))
+                let brillo = (s * PI).sin() * (0.6 + 0.4 * (t * 9.0 + h(7) * 6.0).sin());
+                let tono = if k % 3 == 0 { (255.0, 250.0, 220.0) } else { (255.0, 215.0, 120.0) };
+                (pos, (0.045 + 0.04 * h(8)) * brillo.max(0.0) * p.bendicion, tono)
             } else {
                 (cuenco, 0.0, (0.0, 0.0, 0.0))
             };

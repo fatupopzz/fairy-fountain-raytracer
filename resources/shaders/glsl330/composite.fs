@@ -176,37 +176,95 @@ const float DIFUSION = 0.07;
 const vec3 TONO_SOMBRAS = vec3(0.86, 0.80, 1.10);
 const vec3 TONO_LUCES = vec3(1.06, 0.98, 0.96);
 
-// EL REESCALADO BICUBICO (Catmull-Rom). El cuadro trazado es mas chico que
-// la pantalla (en una retina, mas de tres veces) y el filtro bilineal, que es
-// lo que hace la GPU sola, lo ablanda: cada pixel es el promedio de los
-// cuatro texeles mas cercanos. Catmull-Rom mira dieciseis y conserva el filo
-// de los bordes. Con el truco de juntar los pesos del medio, los dieciseis se
-// leen en nueve lecturas bilineales (Sigg y Hadwiger, GPU Gems 2 cap. 20).
-vec3 bicubica(sampler2D tex, vec2 uv) {
-    vec2 tam = vec2(textureSize(tex, 0));
-    vec2 p = uv * tam - 0.5;
-    vec2 i = floor(p);
-    vec2 f = p - i;
-    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
-    vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
-    vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
-    vec2 w3 = f * f * (-0.5 + 0.5 * f);
-    vec2 w12 = w1 + w2;
-    vec2 t0 = (i - 0.5) / tam;
-    vec2 t3 = (i + 2.5) / tam;
-    vec2 t12 = (i + 0.5 + w2 / w12) / tam;
-    vec3 r = texture(tex, vec2(t0.x, t0.y)).rgb * w0.x * w0.y
-           + texture(tex, vec2(t12.x, t0.y)).rgb * w12.x * w0.y
-           + texture(tex, vec2(t3.x, t0.y)).rgb * w3.x * w0.y
-           + texture(tex, vec2(t0.x, t12.y)).rgb * w0.x * w12.y
-           + texture(tex, vec2(t12.x, t12.y)).rgb * w12.x * w12.y
-           + texture(tex, vec2(t3.x, t12.y)).rgb * w3.x * w12.y
-           + texture(tex, vec2(t0.x, t3.y)).rgb * w0.x * w3.y
-           + texture(tex, vec2(t12.x, t3.y)).rgb * w12.x * w3.y
-           + texture(tex, vec2(t3.x, t3.y)).rgb * w3.x * w3.y;
-    // Catmull-Rom puede pasarse un poco en los bordes duros; no por debajo
-    // de cero.
-    return max(r, 0.0);
+// EL REESCALADO QUE SIGUE LOS BORDES. El cuadro trazado es mas chico que la
+// pantalla (en una retina, de tres a cinco veces, segun el regulador) y hay
+// que agrandarlo. El bilineal lo ablanda y un bicubico comun conserva algo
+// de filo pero deja los bordes diagonales en escalera. La idea (la misma
+// que popularizo el FSR 1 de AMD, pero escrita aca desde cero) es mirar
+// HACIA DONDE VA EL BORDE en cada punto y usar un filtro que se estira a lo
+// largo del borde y se angosta a traves de el: a lo largo promedia (y la
+// escalera desaparece), a traves conserva el salto (y el borde queda
+// nitido).
+//
+//   1. Se leen los dieciseis texeles de alrededor (4 x 4).
+//   2. El gradiente de la luminancia en el punto (diferencias centrales en
+//      los cuatro texeles del medio, mezcladas por la posicion) dice la
+//      direccion que CRUZA el borde, y su largo cuanto borde hay.
+//   3. Cada texel (menos las cuatro esquinas) pesa por un Lanczos de radio
+//      2 evaluado en un espacio girado al borde: las distancias a traves del
+//      borde se agrandan y las distancias a lo largo se achican, mas cuanto
+//      mas borde hay. Donde no hay borde el filtro queda redondo.
+//   4. El Lanczos tiene lobulos negativos (es lo que da el filo) y cerca de
+//      un salto fuerte pasa de largo; el resultado se recorta al rango de los
+//      cuatro texeles mas cercanos, que es lo que evita el halo.
+
+float luma(vec3 c) {
+    return dot(c, vec3(0.299, 0.587, 0.114));
+}
+
+float lanczos2(float x) {
+    x = abs(x);
+    if (x < 1e-4) return 1.0;
+    if (x >= 2.0) return 0.0;
+    float px = 3.14159265 * x;
+    return (sin(px) / px) * (sin(px * 0.5) / (px * 0.5));
+}
+
+vec3 por_bordes(sampler2D tex, vec2 uv) {
+    ivec2 tam = textureSize(tex, 0);
+    vec2 p = uv * vec2(tam) - 0.5;
+    ivec2 base = ivec2(floor(p));
+    vec2 f = p - vec2(base);
+
+    vec3 c[16];
+    float l[16];
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 4; x++) {
+            ivec2 q = clamp(base + ivec2(x - 1, y - 1), ivec2(0), tam - 1);
+            vec3 v = texelFetch(tex, q, 0).rgb;
+            c[y * 4 + x] = v;
+            l[y * 4 + x] = luma(v);
+        }
+    }
+
+    // El gradiente en el punto: el de cada uno de los cuatro texeles del
+    // medio, mezclado en bilineal por la posicion.
+    vec2 g = vec2(0.0);
+    for (int k = 0; k < 4; k++) {
+        int x = 1 + (k & 1);
+        int y = 1 + (k >> 1);
+        float w = ((k & 1) == 1 ? f.x : 1.0 - f.x) * ((k >> 1) == 1 ? f.y : 1.0 - f.y);
+        float gx = l[y * 4 + x + 1] - l[y * 4 + x - 1];
+        float gy = l[(y + 1) * 4 + x] - l[(y - 1) * 4 + x];
+        g += w * vec2(gx, gy);
+    }
+    float largo = length(g);
+    vec2 cruza = largo > 1e-5 ? g / largo : vec2(1.0, 0.0);
+    vec2 sigue = vec2(-cruza.y, cruza.x);
+    // Cuanto borde hay: nada en lo plano, todo en un salto claro.
+    float borde = smoothstep(0.02, 0.25, largo);
+    float escala_cruza = 1.0 + 0.7 * borde;
+    float escala_sigue = 1.0 / (1.0 + 1.2 * borde);
+
+    vec3 suma = vec3(0.0);
+    float peso = 0.0;
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 4; x++) {
+            // Las cuatro esquinas quedan afuera: estan a mas de 2 del
+            // centro en casi todas las posiciones y solo agregarian costo.
+            if ((x == 0 || x == 3) && (y == 0 || y == 3)) continue;
+            vec2 o = vec2(float(x - 1), float(y - 1)) - f;
+            float a = dot(o, cruza) * escala_cruza;
+            float b = dot(o, sigue) * escala_sigue;
+            float w = lanczos2(sqrt(a * a + b * b));
+            suma += c[y * 4 + x] * w;
+            peso += w;
+        }
+    }
+    vec3 r = suma / max(peso, 1e-4);
+    vec3 menor = min(min(c[5], c[6]), min(c[9], c[10]));
+    vec3 mayor = max(max(c[5], c[6]), max(c[9], c[10]));
+    return clamp(r, menor, mayor);
 }
 
 void main() {
@@ -236,7 +294,7 @@ void main() {
     // a un pixel de pantalla, con el cuadro estirado tres veces, los cinco
     // puntos caian casi en el mismo texel y el realce no hacia casi nada.
     vec2 texel = 1.0 / vec2(textureSize(texture0, 0));
-    vec3 e = bicubica(texture0, fragTexCoord);
+    vec3 e = por_bordes(texture0, fragTexCoord);
     vec3 n = texture(texture0, fragTexCoord + vec2(0.0, -texel.y)).rgb;
     vec3 s = texture(texture0, fragTexCoord + vec2(0.0, texel.y)).rgb;
     vec3 o = texture(texture0, fragTexCoord + vec2(-texel.x, 0.0)).rgb;

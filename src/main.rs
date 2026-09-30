@@ -120,6 +120,8 @@ mod cielo;
 mod cube;
 mod framebuffer;
 mod fuego_de_din;
+mod corazon;
+mod mariposas;
 mod fuente;
 mod isla;
 mod grupo_acotado;
@@ -315,6 +317,52 @@ impl Sombras {
     fn vacio() -> Sombras {
         Sombras { luces: [usize::MAX; LUCES_CACHE] }
     }
+}
+
+/// EL NIVEL DE CALIDAD, de 0 a 3, que mueve el REGULADOR en vivo (ver el
+/// ciclo principal). Una MacBook Air no tiene ventilador: bajo carga
+/// sostenida baja la velocidad del procesador a la mitad en menos de un
+/// minuto, y la parte pesada de la cancion (el hada, la bendicion, el
+/// corazon) llegaba a 80 ms por cuadro. El regulador mira cuanto tarda el
+/// cuadro y, si se pasa del presupuesto, baja lo que mas cuesta y menos se
+/// ve; si sobra, lo vuelve a subir.
+///
+///   3: todo (dos rayos de oclusion, tres rebotes, sombras en los reflejos
+///      fuertes);
+///   2: un solo rayo de oclusion (el acumulador temporal promedia el ruido);
+///   1: ademas, dos rebotes, y los reflejos no preguntan por la sombra;
+///   0: ademas, sin oclusion ambiental, y las luces tenues se cortan antes.
+///
+/// En foto y en video se queda en 3: ahi no hay apuro.
+/// El presupuesto del cuadro entero en vivo, en milisegundos: 30 por
+/// segundo.
+/// Estuvo en 33 (30 por segundo); a 40 (25) el regulador baja la calidad
+/// bastante menos seguido, y la escena se ve nitida mas tiempo.
+const PRESUPUESTO_MS: f32 = 40.0;
+
+/// LOS NIVELES DEL REGULADOR, de peor a mejor: la resolucion del trazado y
+/// el nivel de `CALIDAD`. Primero se baja lo que menos se ve (un rayo de
+/// oclusion en vez de dos), despues la resolucion, y asi alternando. La
+/// resolucion es la palanca grande (a 320 x 240 son la tercera parte de los pixeles),
+/// y el reescalado bicubico de la GPU disimula bastante la diferencia. Es
+/// la RESOLUCION DINAMICA de las consolas: fluido primero, nitido cuando se
+/// puede.
+const NIVELES: [((usize, usize), u32); 9] = [
+    ((320, 240), 0),
+    ((352, 264), 0),
+    ((352, 264), 1),
+    ((400, 300), 0),
+    ((400, 300), 1),
+    ((480, 360), 1),
+    ((480, 360), 2),
+    ((RENDER_W as usize, RENDER_H as usize), 2),
+    ((RENDER_W as usize, RENDER_H as usize), 3),
+];
+
+static CALIDAD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(3);
+
+fn calidad() -> u32 {
+    CALIDAD.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Aporte minimo de una luz para que valga la pena tirarle el rayo de
@@ -707,7 +755,12 @@ fn cast_ray(
     let mut ao = 0.0f32;
     if depth == 0 {
         let origen_ao = intersect.point + intersect.normal * 1e-3;
-        for k in 0..AO_RAYOS {
+        let ao_rayos = match calidad() {
+            3 => AO_RAYOS,
+            1 | 2 => 1,
+            _ => 0,
+        };
+        for k in 0..ao_rayos {
             let s = azar::revolver(semilla ^ (k as u32).wrapping_mul(0x9e37_79b9) ^ 0x00a0_00a0);
 
             // Direccion PONDERADA POR EL COSENO: sumarle a la normal un
@@ -755,7 +808,7 @@ fn cast_ray(
         // tocar los extremos, asi que el rincon cerrado queda igual de
         // cerrado y lo que gana es la zona de contacto, que es la que tiene
         // que leerse.
-        ao = (ao / AO_RAYOS as f32).sqrt() * AO_FUERZA;
+        ao = (ao / ao_rayos.max(1) as f32).sqrt() * AO_FUERZA;
     }
 
     // --- Iluminacion ---
@@ -804,6 +857,11 @@ fn cast_ray(
 
     let mut acumulado = [lit.r as f32, lit.g as f32, lit.b as f32];
     let base_f = [base_color.r as f32, base_color.g as f32, base_color.b as f32];
+    let (min_aporte, sombra_min) = match calidad() {
+        3 | 2 => (MIN_APORTE_LUZ, SOMBRA_REFLEJO_MIN),
+        1 => (MIN_APORTE_LUZ, 1.01),
+        _ => (MIN_APORTE_LUZ * 4.0, 1.01),
+    };
     for (numero_luz, light) in lights.iter().enumerate() {
         // CORTE TEMPRANO POR APORTE.
         //
@@ -815,7 +873,7 @@ fn cast_ray(
         // en el rincon donde se las ve. Es lo que hace que agregar luces
         // de ambiente no se pague en cuadros por segundo.
         let distancia = (light.position - intersect.point).magnitude();
-        if light.intensity * light.atenuacion(distancia) < MIN_APORTE_LUZ {
+        if light.intensity * light.atenuacion(distancia) < min_aporte {
             continue;
         }
 
@@ -920,7 +978,7 @@ fn cast_ray(
         // eran la quinta parte del cuadro (medido contando instrucciones:
         // 54 contra 43 mil millones). Los rebotes fuertes, el agua mirada de
         // costado y la obsidiana, la siguen calculando.
-        let sombra_barata = depth > 0 && peso < SOMBRA_REFLEJO_MIN;
+        let sombra_barata = depth > 0 && peso < sombra_min;
         if !sombra_barata {
         let recordado = sombras.luces.get(numero_luz).copied().unwrap_or(usize::MAX);
         let resuelto = recordado != usize::MAX
@@ -1518,6 +1576,15 @@ struct PostGpu {
     /// El tamano del rectangulo donde la ultima pasada dibuja, en las
     /// coordenadas del que dibuja. Ver `efectos`.
     destino: (f32, f32),
+    /// Si el caleidoscopio se salteo en este cuadro (esta apagado): la
+    /// ultima pasada lee `rayos` en vez de `plegada`.
+    sin_pliegue: bool,
+    /// Donde va el numero de muestras de los rayos de luz. Ver
+    /// `muestras_rayos`.
+    loc_gr_samples: i32,
+    /// El destello de lente del sol. Ver `sol`.
+    loc_sol_pos: i32,
+    loc_sol_fuerza: i32,
     threshold: Shader,
     baja: Shader,
     sube: Shader,
@@ -1718,6 +1785,8 @@ impl PostGpu {
         let loc_fx_depth = effects.get_shader_location("depthTex");
         let loc_streak = effects.get_shader_location("streak");
         let loc_letterbox = effects.get_shader_location("letterbox");
+        let loc_sol_pos = effects.get_shader_location("solPantalla");
+        let loc_sol_fuerza = effects.get_shader_location("solFuerza");
         let loc_fx_bloom = effects.get_shader_location("bloomTex");
 
         // Constantes por toda la corrida: se mandan una sola vez.
@@ -1772,6 +1841,10 @@ impl PostGpu {
             ancho,
             alto,
             destino,
+            sin_pliegue: false,
+            loc_gr_samples,
+            loc_sol_pos,
+            loc_sol_fuerza,
             threshold,
             baja,
             sube,
@@ -1822,11 +1895,25 @@ impl PostGpu {
     /// `EndTextureMode` restaura los de la pantalla, asi que meterlo dentro
     /// del dibujado funcionaria igual; pero dejarlo afuera separa lo que se
     /// pinta en buffers de lo que se pinta en la ventana.
+    /// Cuantas muestras usan los rayos de luz. En los redibujados de la
+    /// reproyeccion bajan: son un resplandor suave y ahi se dibujan hasta
+    /// dos veces por cuadro trazado.
+    fn muestras_rayos(&mut self, n: i32) {
+        self.godrays.set_shader_value(self.loc_gr_samples, n);
+    }
+
+    /// Donde esta el sol en la pantalla y cuanto destella (ver el destello
+    /// de lente en effects.fs).
+    fn sol(&mut self, pantalla: [f32; 2], fuerza: f32) {
+        self.effects.set_shader_value(self.loc_sol_pos, pantalla);
+        self.effects.set_shader_value(self.loc_sol_fuerza, fuerza);
+    }
+
     fn armar_bloom(
         &mut self,
         rl: &mut RaylibHandle,
         thread: &RaylibThread,
-        tex_rt: &Texture2D,
+        tex_rt: &(impl RaylibTexture2D + AsRef<raylib::ffi::Texture2D>),
         radio: f32,
         umbral: f32,
     ) {
@@ -1955,7 +2042,7 @@ impl PostGpu {
         &mut self,
         rl: &mut RaylibHandle,
         thread: &RaylibThread,
-        tex_rt: &Texture2D,
+        tex_rt: &(impl RaylibTexture2D + AsRef<raylib::ffi::Texture2D>),
         p: &SceneParams,
     ) {
         let (ancho_f, alto_f) = (self.ancho as f32, self.alto as f32);
@@ -2104,9 +2191,15 @@ impl PostGpu {
         thread: &RaylibThread,
         // El cuadro crudo del trazador. No se dibuja: se lee su alpha, que
         // es la profundidad, para saber que parte de la imagen es fondo.
-        tex_rt: &Texture2D,
+        tex_rt: &(impl RaylibTexture2D + AsRef<raylib::ffi::Texture2D>),
         p: &SceneParams,
     ) {
+        // APAGADO (el pliegue quedo en cero en todo el tema) no se hace la
+        // pasada: era copiar la pantalla entera para no cambiar nada.
+        self.sin_pliegue = p.kal_mix <= 0.001;
+        if self.sin_pliegue {
+            return;
+        }
         let (ancho_f, alto_f) = (self.ancho as f32, self.alto as f32);
         let PostGpu {
             kaleidoscope,
@@ -2173,7 +2266,7 @@ impl PostGpu {
     fn efectos<D: RaylibDraw>(
         &mut self,
         d: &mut D,
-        tex_rt: &Texture2D,
+        tex_rt: &(impl RaylibTexture2D + AsRef<raylib::ffi::Texture2D>),
         p: &SceneParams,
         tiempo: f32,
         foco: f32,
@@ -2182,6 +2275,8 @@ impl PostGpu {
         let PostGpu {
             effects,
             plegada,
+            rayos,
+            sin_pliegue,
             mips,
             loc_fx_bloom,
             loc_chromatic,
@@ -2252,7 +2347,7 @@ impl PostGpu {
         let halo = *mips[ESTELA_NIVEL.min(BLOOM_NIVELES - 1)].texture().as_ref();
         let loc_halo = *loc_fx_bloom;
 
-        let fuente = plegada.texture();
+        let fuente = if *sin_pliegue { rayos.texture() } else { plegada.texture() };
         let mut sm = d.begin_shader_mode(effects);
         unsafe {
             raylib::ffi::SetShaderValueTexture(handle, loc_prof, profundidad);
@@ -2265,7 +2360,7 @@ impl PostGpu {
 /// Radio maximo del desenfoque de profundidad de campo, en UV de la
 /// ventana: 0.007 son unos 6 pixeles a 800 de ancho. Suave a proposito: el
 /// fondo se ablanda, no se derrite.
-const DOF_RADIO: f32 = 0.010;
+const DOF_RADIO: f32 = 0.007;
 
 /// Cuanto llegan a pesar las estelas anamorficas al final del tema.
 ///
@@ -2411,7 +2506,7 @@ const LINK_CABEZA: Vec3 = Vec3::new(link::PIES.x, link::PIES.y + 1.5, link::PIES
 /// cara y la ocarina, con el cielo detras) y en el 96 esta del lado de la
 /// entrada (por encima del hombro, con la fuente delante de el). El programa
 /// no pelea contra la vuelta: la aprovecha.
-const PROGRAMA: [Plano; 17] = [
+const PROGRAMA: [Plano; 18] = [
     Plano { t: 0.0, radio: 20.0, phi: 0.34, mira_y: -0.2, link: 0.0, giro: 0.0 },
     Plano { t: 22.0, radio: 18.0, phi: 0.27, mira_y: 0.4, link: 0.0, giro: 0.0 },
     Plano { t: 37.0, radio: 14.0, phi: 0.20, mira_y: 1.2, link: 0.0, giro: 0.0 },
@@ -2430,7 +2525,12 @@ const PROGRAMA: [Plano; 17] = [
     Plano { t: 140.0, radio: 6.5, phi: 0.02, mira_y: 3.4, link: 0.4, giro: -3.13 },
     Plano { t: 146.0, radio: 7.5, phi: 0.05, mira_y: 3.2, link: 0.3, giro: -3.42 },
     Plano { t: 158.0, radio: 11.5, phi: 0.14, mira_y: 2.2, link: 0.0, giro: -3.42 },
-    Plano { t: 172.0, radio: 16.0, phi: 0.25, mira_y: 0.8, link: 0.0, giro: -3.42 },
+    // "OBTUVISTE UN CONTENEDOR DE CORAZON": de frente a Link, con el mismo
+    // angulo que el primer plano del segundo 45 (la orbita dio casi dos
+    // vueltas: -1.93 es ese angulo despues de ellas), mientras levanta el
+    // corazon sobre la cabeza. Ver `corazon.rs`.
+    Plano { t: 166.5, radio: 3.6, phi: 0.26, mira_y: 0.3, link: 1.0, giro: -1.93 },
+    Plano { t: 175.5, radio: 4.4, phi: 0.22, mira_y: 0.3, link: 1.0, giro: -1.93 },
     Plano { t: 183.3, radio: 20.0, phi: 0.34, mira_y: -0.2, link: 0.0, giro: -3.42 },
 ];
 
@@ -2696,6 +2796,182 @@ fn avanzar_noche(cielo: &mut Cielo, lights: &mut [Light], p: &SceneParams) {
             // oscura), y con la potencia vieja el borde de la piscina
             // quemaba y el bloom se comia el centro del cuadro.
             antorcha.intensity = 1.3 * (0.72 + ruido * 0.38 + p.pulso * 0.12);
+        }
+    }
+}
+
+/// LA REPROYECCION en la GPU (ver `reproyectar.fs`): el shader y donde van
+/// sus uniformes.
+struct Reproyeccion {
+    shader: Shader,
+    locs: [i32; 11],
+}
+
+impl Reproyeccion {
+    fn nueva(rl: &mut RaylibHandle, thread: &RaylibThread) -> Reproyeccion {
+        let shader = rl.load_shader(thread, None, Some(&format!("{SHADERS}/reproyectar.fs")));
+        assert!(shader.is_shader_valid(), "no se pudo compilar {SHADERS}/reproyectar.fs (mirar el log de raylib)");
+        let nombres = [
+            "ojoAntes", "derAntes", "arrAntes", "adeAntes", "ojoAhora", "derAhora", "arrAhora", "adeAhora", "escala",
+            "aspecto", "profMax",
+        ];
+        let locs = nombres.map(|n| shader.get_shader_location(n));
+        Reproyeccion { shader, locs }
+    }
+
+    /// Dibuja `fuente` (el ultimo cuadro trazado, visto desde `antes`) en
+    /// `destino` como se veria desde `ahora`.
+    fn aplicar(
+        &mut self,
+        rl: &mut RaylibHandle,
+        thread: &RaylibThread,
+        fuente: &Texture2D,
+        destino: &mut RenderTexture2D,
+        antes: &Camera,
+        ahora: &Camera,
+    ) {
+        let v = |p: Vec3| [p.x, p.y, p.z];
+        let (d0, a0, f0) = antes.basis();
+        let (d1, a1, f1) = ahora.basis();
+        let vectores = [v(antes.position), v(d0), v(a0), v(f0), v(ahora.position), v(d1), v(a1), v(f1)];
+        for (loc, valor) in self.locs.iter().zip(vectores) {
+            self.shader.set_shader_value(*loc, valor);
+        }
+        let (w, h) = (fuente.width() as f32, fuente.height() as f32);
+        self.shader.set_shader_value(self.locs[8], (camera::CAMPO_VISUAL / 2.0).tan());
+        self.shader.set_shader_value(self.locs[9], w / h);
+        self.shader.set_shader_value(self.locs[10], Framebuffer::PROFUNDIDAD_MAXIMA);
+        let mut tm = rl.begin_texture_mode(thread, destino);
+        tm.clear_background(Color::BLACK);
+        // Sin mezcla: el alfa es la DISTANCIA, no una transparencia, y con
+        // la mezcla de siempre el color se oscurecia con la distancia.
+        unsafe { raylib::ffi::rlDisableColorBlend() };
+        {
+            let mut sm = tm.begin_shader_mode(&mut self.shader);
+            // Alto del origen NEGATIVO: se escribe dado vuelta, para que el
+            // buffer quede con la misma orientacion que la textura del
+            // trazador y el resto de la cadena lo lea igual que a ella.
+            sm.draw_texture_pro(
+                fuente,
+                Rectangle { x: 0.0, y: 0.0, width: w, height: -h },
+                Rectangle { x: 0.0, y: 0.0, width: w, height: h },
+                Vector2::zero(),
+                0.0,
+                Color::WHITE,
+            );
+        }
+        unsafe { raylib::ffi::rlEnableColorBlend() };
+    }
+}
+
+/// Un buffer de la GPU del tamano del cuadro trazado, para la reproyeccion.
+fn buffer_reproyectado(rl: &mut RaylibHandle, thread: &RaylibThread, w: usize, h: usize) -> RenderTexture2D {
+    let rt = rl
+        .load_render_texture(thread, w as u32, h as u32)
+        .expect("no se pudo crear el buffer de la reproyeccion");
+    rt.texture().set_texture_filter(thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
+    rt.texture().set_texture_wrap(thread, TextureWrap::TEXTURE_WRAP_CLAMP);
+    rt
+}
+
+/// Cuando entra y cuando empieza a irse el titulo, en segundos de cancion.
+const TITULO_ENTRA: f32 = 1.0;
+const TITULO_SALE: f32 = 8.0;
+
+/// EL TITULO: el logo de *Ocarina of Time* sobre la isla en los primeros
+/// segundos, como la pantalla de titulo del juego, con la camara todavia
+/// lejos y alta. Entra en dos segundos creciendo apenas, se queda, y se va en
+/// otros dos antes de que la camara baje. Con cada nota del arpa de la intro
+/// DESTELLA: la misma imagen se suma encima, mas tenue. Va despues de todo
+/// el post-procesado, asi que no le toca ni la niebla ni el desenfoque.
+fn dibujar_titulo<D: RaylibDraw>(d: &mut D, logo: &Texture2D, (ancho, alto): (f32, f32), tiempo: f32, brillo: f32) {
+    let suave = |x: f32| {
+        let x = x.clamp(0.0, 1.0);
+        x * x * (3.0 - 2.0 * x)
+    };
+    let a = suave((tiempo - TITULO_ENTRA) / 2.0) * (1.0 - suave((tiempo - TITULO_SALE) / 2.0));
+    if a <= 0.002 {
+        return;
+    }
+    let crece = 0.94 + 0.08 * ((tiempo - TITULO_ENTRA) / (TITULO_SALE + 2.0 - TITULO_ENTRA)).clamp(0.0, 1.0);
+    let alto_logo = alto * 0.60 * crece;
+    let ancho_logo = alto_logo * logo.width as f32 / logo.height as f32;
+    let destino = Rectangle {
+        x: (ancho - ancho_logo) * 0.5,
+        y: alto * 0.44 - alto_logo * 0.5,
+        width: ancho_logo,
+        height: alto_logo,
+    };
+    let origen = Rectangle { x: 0.0, y: 0.0, width: logo.width as f32, height: logo.height as f32 };
+    // Un resplandor claro detras de las letras: el "THE LEGEND OF" y el
+    // "OCARINA OF TIME" son negros y sobre el cielo violeta no se leian.
+    // Tres circulos degradados, del centro de las letras hacia afuera.
+    for (dx, r, k) in [(0.18f32, 0.36f32, 0.75f32), (0.02, 0.30, 0.50), (0.30, 0.26, 0.50)] {
+        d.draw_circle_gradient(
+            (destino.x + destino.width * (0.5 + dx)) as i32,
+            (destino.y + destino.height * 0.58) as i32,
+            destino.height * r,
+            Color::new(255, 245, 250, (200.0 * k * a) as u8),
+            Color::new(255, 245, 250, 0),
+        );
+    }
+    d.draw_texture_pro(logo, origen, destino, Vector2::zero(), 0.0, Color::new(255, 255, 255, (255.0 * a) as u8));
+    let mut suma = d.begin_blend_mode(BlendMode::BLEND_ADDITIVE);
+    if brillo > 0.01 {
+        suma.draw_texture_pro(
+            logo,
+            origen,
+            destino,
+            Vector2::zero(),
+            0.0,
+            Color::new(255, 255, 255, (90.0 * a * brillo.min(1.0)) as u8),
+        );
+    }
+
+    // NAVI, como en la pantalla de titulo del juego: vuela alrededor del
+    // logo en un ocho, con su estela de chispas. La estela son las posiciones
+    // por las que paso en la ultima media vuelta, cada vez mas chicas y
+    // tenues; todo en suma, que es como se ve la luz.
+    let centro = (destino.x + destino.width * 0.5, destino.y + destino.height * 0.5);
+    let (rx, ry) = (destino.width * 0.62, destino.height * 0.42);
+    let camino = |t: f32| {
+        let th = (t - TITULO_ENTRA) * 1.25 + 0.6;
+        (
+            centro.0 + rx * th.cos(),
+            centro.1 + ry * 0.75 * (2.0 * th).sin() + ry * 0.12 * (5.0 * th).sin(),
+        )
+    };
+    let escala = alto / 600.0;
+    for k in (1..28).rev() {
+        let t = tiempo - k as f32 * 0.035;
+        let (x, y) = camino(t);
+        let vida = 1.0 - k as f32 / 28.0;
+        // Las chispas titilan, y se corren un poco al azar hacia afuera.
+        let titila = 0.6 + 0.4 * (k as f32 * 2.3 + tiempo * 17.0).sin();
+        let deriva = ((k * 7919) % 13) as f32 / 13.0 - 0.5;
+        suma.draw_circle_gradient(
+            (x + deriva * 6.0 * escala) as i32,
+            (y + vida.mul_add(-3.0, 3.0) * escala * deriva) as i32,
+            (2.5 + 7.0 * vida) * escala,
+            Color::new(210, 235, 255, (255.0 * a * vida * titila) as u8),
+            Color::new(120, 170, 255, 0),
+        );
+    }
+    let (x, y) = camino(tiempo);
+    // El halo grande y el cuerpo.
+    suma.draw_circle_gradient(x as i32, y as i32, 48.0 * escala, Color::new(150, 200, 255, (130.0 * a) as u8), Color::new(80, 140, 255, 0));
+    suma.draw_circle_gradient(x as i32, y as i32, 16.0 * escala, Color::new(255, 255, 255, (255.0 * a) as u8), Color::new(170, 220, 255, 0));
+    // Las alas: dos pares de elipses que aletean rapido.
+    let aleteo = (tiempo * 38.0).sin().abs();
+    for lado in [-1.0f32, 1.0] {
+        for (dy, tam) in [(-4.0f32, 1.0f32), (3.0, 0.75)] {
+            suma.draw_ellipse(
+                (x + lado * 15.0 * escala) as i32,
+                (y + dy * 1.7 * escala) as i32,
+                (17.0 * tam * (0.4 + 0.6 * aleteo)) * escala,
+                (8.5 * tam) * escala,
+                Color::new(190, 225, 255, (110.0 * a) as u8),
+            );
         }
     }
 }
@@ -3749,6 +4025,10 @@ fn main() {
     escena.registrar_hada_mayor(hada_mayor::armar(&mut objects, &mut lights));
     // EL FUEGO DE DIN, el poder que el hada le da a Link. Ver `fuego_de_din.rs`.
     escena.registrar_fuego(fuego_de_din::armar(&mut objects, &mut lights));
+    // EL CONTENEDOR DE CORAZON, el premio del final. Ver `corazon.rs`.
+    escena.registrar_corazon(corazon::armar(&mut objects, &mut lights));
+    // LAS MARIPOSAS del anillo de pasto. Ver `mariposas.rs`.
+    escena.registrar_mariposas(mariposas::armar(&mut objects));
 
     escena.registrar_isla(isla);
     escena.registrar_luces(&lights);
@@ -4380,6 +4660,22 @@ fn main() {
         rl.get_window_scale_dpi()
     );
     let mut post = PostGpu::nuevo(&mut rl, &thread, post_w, post_h, destino);
+    // LA REPROYECCION (ver `reproyectar.fs`), solo en vivo.
+    let mut reproyeccion = Reproyeccion::nueva(&mut rl, &thread);
+    let mut reproyectada = buffer_reproyectado(&mut rl, &thread, traza_w, traza_h);
+    // Apagada por defecto: todavia ablanda la imagen (el cuadro se filtra
+    // dos veces, al moverlo y al agrandarlo). `REPROYECCION=1` o la R la
+    // prenden.
+    let mut reproyectar = std::env::var("REPROYECCION").is_ok();
+    let mut ultimo_dibujo = std::time::Instant::now();
+    // El logo de Ocarina of Time para la intro (ver `dibujar_titulo`), con
+    // mipmaps: se dibuja mas chico que la imagen, y sin ellos los bordes de
+    // las letras titilarian.
+    let mut logo = rl
+        .load_texture(&thread, "resources/textures/logo_ocarina.png")
+        .expect("no se pudo cargar resources/textures/logo_ocarina.png");
+    logo.gen_texture_mipmaps();
+    logo.set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_TRILINEAR);
     let mut salida_video: Option<RenderTexture2D> = video.is_some().then(|| {
         rl.load_render_texture(&thread, VIDEO_W, VIDEO_H).expect("no se pudo crear el buffer del video")
     });
@@ -4400,6 +4696,8 @@ fn main() {
     println!("  mouse: arrastrar para orbitar, rueda para acercar");
     println!("  X        antialiasing 2x2 (cuadruplica el costo)");
     println!("  T        antialiasing temporal (gratis; prendido)");
+    println!("  G        regulador: fluidez (prendido) o calidad maxima (apagado)");
+    println!("  R        reproyeccion: la camara se ve a 60 cuadros por segundo (prendida)");
     println!("  H        mostrar / ocultar la ayuda en pantalla");
     println!("  F        guardar una foto (PNG) del cuadro en pantalla");
     println!("  trazado fijo a {RENDER_W}x{RENDER_H}, estirado a {ventana_w}x{ventana_h}");
@@ -4455,9 +4753,25 @@ fn main() {
     // el doble.
     rayon::ThreadPoolBuilder::new().build_global().ok();
     let mut dibujo_pendiente: Option<(SceneParams, Camera, f32, f32)> = None;
+    // Lo que necesita el acumulador del cuadro recien trazado (peso, camara,
+    // camara anterior, jitter), que en vivo corre en la vuelta siguiente.
+    let mut acumular_pendiente: Option<(f32, Camera, Option<Camera>, (f32, f32))> = None;
     // El trazado en tablero de ajedrez, en vivo. `SIN_TABLERO=1` lo apaga.
     let tablero = std::env::var("SIN_TABLERO").is_err();
     let mut perfil_suma = [0.0f32; 3];
+    let mut perfil_peor = 0.0f32;
+    // El regulador de calidad: el promedio corrido del cuadro y cuantos
+    // cuadros faltan para poder volver a cambiar de nivel.
+    // `PRESUPUESTO=40` pide menos cuadros por segundo a cambio de mas
+    // calidad; `SIN_REGULADOR=1` arranca con el regulador apagado (G lo
+    // prende y apaga en vivo).
+    let presupuesto: f32 = std::env::var("PRESUPUESTO").ok().and_then(|v| v.parse().ok()).unwrap_or(PRESUPUESTO_MS);
+    let mut regulador = std::env::var("SIN_REGULADOR").is_err();
+    let mut forzar_nivel: Option<usize> = None;
+    let mut regulador_media = presupuesto;
+    let mut regulador_espera: u32 = 60;
+    let mut nivel_regulador = NIVELES.len() - 1;
+    let mut traza_actual = (traza_w, traza_h);
     while video.is_some() || !rl.window_should_close() {
         // Rellenar el buffer de audio. Va en CADA vuelta: si se saltea, el
         // sonido se corta apenas se vacia lo que raylib tenia por delante.
@@ -4503,6 +4817,24 @@ fn main() {
 
         if rl.is_key_pressed(KeyboardKey::KEY_H) {
             ayuda = !ayuda;
+        }
+
+        // G: prende y apaga el regulador. Apagado, vuelve de una a la
+        // calidad y la resolucion maximas y se queda ahi.
+        if rl.is_key_pressed(KeyboardKey::KEY_G) {
+            regulador = !regulador;
+            if !regulador {
+                nivel_regulador = 0;
+                regulador_espera = 0;
+                forzar_nivel = Some(NIVELES.len() - 1);
+            }
+            println!("regulador: {}", if regulador { "on (fluidez)" } else { "off (calidad maxima)" });
+        }
+
+        // R: prende y apaga la reproyeccion (ver `reproyectar.fs`).
+        if rl.is_key_pressed(KeyboardKey::KEY_R) {
+            reproyectar = !reproyectar;
+            println!("reproyeccion: {}", if reproyectar { "on (60 cuadros en pantalla)" } else { "off" });
         }
 
         if rl.is_key_pressed(KeyboardKey::KEY_T) {
@@ -4581,10 +4913,29 @@ fn main() {
         // Antes de trazar, no despues: el cuadro que se dibuja abajo tiene
         // que ser el de este instante de la cancion.
         let t_escena = std::time::Instant::now();
-        animacion::actualizar_escena(&mut objects, &mut lights, &escena, &params);
-        // EL ARBOL SE REARMA EN CADA CUADRO. Ver `arboles_de`.
-        (arbol, arbol_sombras) = arboles_de(&objects, &occluders);
-        avanzar_noche(&mut cielo, &mut lights, &params);
+        let mut mover_escena = || {
+            animacion::actualizar_escena(&mut objects, &mut lights, &escena, &params);
+            // EL ARBOL SE REARMA EN CADA CUADRO. Ver `arboles_de`.
+            (arbol, arbol_sombras) = arboles_de(&objects, &occluders);
+            avanzar_noche(&mut cielo, &mut lights, &params);
+        };
+        if let Some((peso_previo, cam_previa, ant_previa, jitter_previo)) = acumular_pendiente.take() {
+            // En vivo, el acumulador del cuadro ANTERIOR corre en los nucleos
+            // mientras el hilo principal mueve la escena de este: las dos
+            // cosas tocan datos distintos (el framebuffer una, los objetos la
+            // otra), y antes una esperaba a la otra con los nucleos parados.
+            let fb = &mut framebuffer;
+            std::thread::scope(|s| {
+                let hilo = s.spawn(move || fb.acumular(peso_previo, &cam_previa, ant_previa.as_ref(), jitter_previo));
+                mover_escena();
+                hilo.join().expect("se cayo el hilo del acumulador");
+            });
+            texture
+                .update_texture(framebuffer.to_rgba_bytes())
+                .expect("no se pudo actualizar la textura");
+        } else {
+            mover_escena();
+        }
         let ms_escena = t_escena.elapsed().as_secs_f32() * 1000.0;
 
         // ---------- TRAZADO ----------
@@ -4608,7 +4959,15 @@ fn main() {
         // serie (foto, video) despues del trazado de este cuadro, y en paralelo
         // (en vivo) MIENTRAS se traza el cuadro siguiente. Ver `en_paralelo`.
         macro_rules! dibujar {
-            ($params:expr, $camera:expr, $tiempo:expr, $foco:expr) => {{
+            ($params:expr, $camera:expr, $tiempo:expr, $foco:expr, $fuente:expr, $completo:expr) => {{
+                let fuente = $fuente;
+                // Un redibujado de la reproyeccion (`completo` en falso) reusa
+                // el halo del ultimo cuadro completo y hace los rayos de luz
+                // con menos muestras: el halo es algo sin detalle, y
+                // recalcularlo dos veces por cuadro trazado le quitaba al
+                // trazado la mitad de la maquina.
+                let completo: bool = $completo;
+                post.muestras_rayos(if completo { GODRAYS_SAMPLES } else { GODRAYS_SAMPLES / 3 });
                 let params: SceneParams = $params;
                 let camera: Camera = $camera;
                 let tiempo: f32 = $tiempo;
@@ -4627,23 +4986,40 @@ fn main() {
                 // derramado en el coro final. El caleidoscopio pliega solo el fondo
                 // (usa la profundidad que el trazado dejo en el alpha como
                 // mascara), asi que el escenario se ve entero todo el tiempo.
-                post.armar_bloom(
-                    &mut rl,
-                    &thread,
-                    &texture,
-                    params.bloom_radius,
-                    params.bloom_threshold,
-                );
-                post.componer(&mut rl, &thread, &texture, &params);
+                if completo {
+                    post.armar_bloom(
+                        &mut rl,
+                        &thread,
+                        fuente,
+                        params.bloom_radius,
+                        params.bloom_threshold,
+                    );
+                }
+                post.componer(&mut rl, &thread, fuente, &params);
                 // Los rayos bajan desde la luz cenital: se proyecta con la camara
                 // de ESTE cuadro, la misma que acaba de trazar.
+                // EL SOL DEL AMANECER: mientras hay amanecer y el sol esta
+                // adelante de la camara, los rayos de luz salen de el (y no
+                // de la luz cenital) y destella la lente (ver effects.fs).
+                let sol = cielo.sol();
+                let adelante = dot(&sol, &camera.basis().2);
+                let sol_pantalla = proyectar_a_pantalla(&camera, camera.position + sol * 1000.0);
+                let en_cuadro = if adelante > 0.3 {
+                    let borde = sol_pantalla[0].min(1.0 - sol_pantalla[0]).min(sol_pantalla[1]).min(1.0 - sol_pantalla[1]);
+                    (borde / 0.08).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let fuerza_sol = ((cielo.amanecer() - 0.2) / 0.5).clamp(0.0, 1.0) * en_cuadro;
+                post.sol(sol_pantalla, fuerza_sol);
+                let origen_rayos = if fuerza_sol > 0.05 { camera.position + sol * 1000.0 } else { lights[0].position };
                 post.god_rays(
                     &mut rl,
                     &thread,
-                    proyectar_a_pantalla(&camera, lights[0].position),
+                    proyectar_a_pantalla(&camera, origen_rayos),
                     params.pulso,
                 );
-                post.caleidoscopio(&mut rl, &thread, &texture, &params);
+                post.caleidoscopio(&mut rl, &thread, fuente, &params);
 
                 // En el video el grano va apagado: es ruido distinto en cada cuadro,
                 // o sea justo lo que un compresor de video no puede comprimir, y con
@@ -4659,7 +5035,8 @@ fn main() {
                 if let Some(salida) = salida_video.as_mut() {
                     let mut tm = rl.begin_texture_mode(&thread, salida);
                     tm.clear_background(BACKGROUND);
-                    post.efectos(&mut tm, &texture, &params, tiempo, foco);
+                    post.efectos(&mut tm, fuente, &params, tiempo, foco);
+                    dibujar_titulo(&mut tm, &logo, (VIDEO_W as f32, VIDEO_H as f32), tiempo, params.pulso);
                 }
 
                 // ---------- DIBUJADO ----------
@@ -4687,7 +5064,8 @@ fn main() {
                         Color::WHITE,
                     );
                 } else {
-                    post.efectos(&mut d, &texture, &params, tiempo, foco);
+                    post.efectos(&mut d, fuente, &params, tiempo, foco);
+                    dibujar_titulo(&mut d, &logo, (ventana_w as f32, ventana_h as f32), tiempo, params.pulso);
                 }
 
                 // EL HUD NO SALE EN LAS FOTOS.
@@ -4723,8 +5101,12 @@ fn main() {
                     // contar los saltos a ojo.
                     d.draw_text(
                         &format!(
-                            "{RENDER_W}x{RENDER_H} -> {ventana_w}x{ventana_h}  ({:.0} ms)",
-                            cuadro_medio * 1000.0
+                            "{}x{} -> {ventana_w}x{ventana_h}  ({:.0} ms, nivel {}/{})",
+                            traza_actual.0,
+                            traza_actual.1,
+                            cuadro_medio * 1000.0,
+                            nivel_regulador,
+                            NIVELES.len() - 1
                         ),
                         10,
                         hud + 46,
@@ -4792,6 +5174,7 @@ fn main() {
             // El costo es un cuadro de retraso en pantalla (~20 ms).
             let ambiente = ambiente_de(params.luz_del_dia, params.swell);
             let fase_agua = params.tiempo * animacion::AGUA_VELOCIDAD;
+            let profundidad = if calidad() >= 2 { MAX_DEPTH } else { MAX_DEPTH - 1 };
             // EL TABLERO (ver `Framebuffer::tablero`): solo con el acumulador
             // prendido, que es el que completa la otra mitad.
             framebuffer.tablero = (tablero && taa && !antialias).then_some(cuadro_taa % 2);
@@ -4802,13 +5185,56 @@ fn main() {
                 let hilo = s.spawn(move || {
                     fb.clear();
                     render(
-                        fb, objs, cie, arb, arbs, luc, &camera, MAX_DEPTH, antialias, jitter,
+                        fb, objs, cie, arb, arbs, luc, &camera, profundidad, antialias, jitter,
                         ambiente, fase_agua, cuadro_taa, || {},
                     );
                     fb.rellenar_tablero();
                 });
-                if let Some((p, c, t, f)) = pendiente {
-                    dibujar!(p, c, t, f);
+                match pendiente {
+                    // CON REPROYECCION: mientras se traza este cuadro, el
+                    // anterior se vuelve a dibujar hasta 60 veces por segundo,
+                    // cada vez movido a donde esta la camara en ESE momento
+                    // (ver `reproyectar.fs`). La camara es una funcion del
+                    // segundo de la cancion: la orbita se adelanta lo que la
+                    // cancion avanzo desde que arranco esta vuelta.
+                    Some((_, camara_trazada, _, _)) if reproyectar => {
+                        let mut primero = true;
+                        loop {
+                            reloj.actualizar();
+                            let listo = hilo.is_finished();
+                            // Como mucho 60 veces por segundo EN TOTAL, contando
+                            // los redibujados de todas las vueltas: sin tope, la
+                            // GPU dibujaba de mas (83 por segundo) y le quitaba
+                            // maquina al trazado. Si el trazado termina antes de
+                            // que toque dibujar, este cuadro no se muestra y se
+                            // muestra el siguiente, que es mas nuevo.
+                            if !listo && ultimo_dibujo.elapsed().as_secs_f32() >= 1.0 / 60.0 {
+                                ultimo_dibujo = std::time::Instant::now();
+                                let completo_primero = primero;
+                                primero = false;
+                                let t_ahora = if reloj.corriendo() { reloj.tiempo() } else { tiempo };
+                                let p_ahora = analisis.get_scene_params(t_ahora);
+                                let orbita_ahora = Orbita {
+                                    timer: orbita.timer + (t_ahora - tiempo),
+                                    theta_manual: orbita.theta_manual,
+                                    phi_manual: orbita.phi_manual,
+                                    radio: orbita.radio,
+                                };
+                                let cam_ahora = camara_forzada.unwrap_or_else(|| orbita_ahora.camara_cine(&p_ahora));
+                                let foco_ahora = orbita_ahora.distancia_de_foco(&p_ahora) / Framebuffer::PROFUNDIDAD_MAXIMA;
+                                reproyeccion.aplicar(&mut rl, &thread, &texture, &mut reproyectada, &camara_trazada, &cam_ahora);
+                                dibujar!(p_ahora, cam_ahora, t_ahora, foco_ahora, reproyectada.texture(), completo_primero);
+                            }
+                            if listo {
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_micros(300));
+                        }
+                    }
+                    Some((p, c, t, f)) => {
+                        dibujar!(p, c, t, f, &texture, true);
+                    }
+                    None => {}
                 }
                 // Mientras termina, el audio no puede quedarse sin datos.
                 while !hilo.is_finished() {
@@ -4890,16 +5316,22 @@ fn main() {
             }
         };
         let t_acumular = std::time::Instant::now();
-        if video.is_none() {
+        if en_paralelo {
+            // Se acumula y se sube en la vuelta que viene, a la par de mover
+            // la escena. Ver `acumular_pendiente`.
+            acumular_pendiente = Some((peso, camera, camara_anterior, jitter));
+        } else if video.is_none() {
             framebuffer.acumular(peso, &camera, camara_anterior.as_ref(), jitter);
         }
         let ms_acumular = t_acumular.elapsed().as_secs_f32() * 1000.0;
         camara_anterior = Some(camera);
 
         let t_subida = std::time::Instant::now();
-        texture
-            .update_texture(framebuffer.to_rgba_bytes())
-            .expect("no se pudo actualizar la textura");
+        if !en_paralelo {
+            texture
+                .update_texture(framebuffer.to_rgba_bytes())
+                .expect("no se pudo actualizar la textura");
+        }
         let ms_subida = t_subida.elapsed().as_secs_f32() * 1000.0;
 
         // Solo el trazado, no el vsync ni el dibujado: es lo unico que
@@ -4933,22 +5365,72 @@ fn main() {
         if en_paralelo {
             dibujo_pendiente = Some((params.clone(), camera, tiempo, foco_actual));
         } else {
-            dibujar!(params.clone(), camera, tiempo, foco_actual);
+            dibujar!(params.clone(), camera, tiempo, foco_actual, &texture, true);
         }
         cuadros += 1;
+        // EL REGULADOR (ver `NIVELES`). Un promedio corrido del cuadro
+        // entero: si pasa del presupuesto (30 por segundo) baja un nivel, y si
+        // sobra mucho lo sube. Despues de cada cambio espera un rato (mas
+        // para subir que para bajar) a que el promedio se asiente, para que
+        // no salte de un nivel a otro a cada rato.
+        if en_paralelo {
+            let ms = perfil_cuadro.elapsed().as_secs_f32() * 1000.0;
+            regulador_media = regulador_media * 0.92 + ms * 0.08;
+            regulador_espera = regulador_espera.saturating_sub(1);
+            let antes = nivel_regulador;
+            if let Some(n) = forzar_nivel.take() {
+                nivel_regulador = n;
+            } else if regulador && regulador_espera == 0 {
+                if regulador_media > presupuesto * 1.08 && nivel_regulador > 0 {
+                    nivel_regulador -= 1;
+                    regulador_espera = 40;
+                } else if regulador_media < presupuesto * 0.62 && nivel_regulador + 1 < NIVELES.len() {
+                    nivel_regulador += 1;
+                    regulador_espera = 150;
+                }
+            }
+            if nivel_regulador != antes {
+                let ((w, h), c) = NIVELES[nivel_regulador];
+                CALIDAD.store(c, std::sync::atomic::Ordering::Relaxed);
+                if (w, h) != traza_actual {
+                    // Cambio de resolucion: buffer y textura nuevos. Lo que
+                    // quedaba pendiente era del tamano viejo y se tira (la
+                    // pantalla se queda un cuadro con la imagen anterior), y
+                    // el acumulador arranca de cero.
+                    framebuffer = Framebuffer::new(w, h, BACKGROUND);
+                    texture = rl
+                        .load_texture_from_image(&thread, &framebuffer.to_image())
+                        .expect("no se pudo crear la textura");
+                    texture.set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
+                    reproyectada = buffer_reproyectado(&mut rl, &thread, w, h);
+                    traza_actual = (w, h);
+                    acumular_pendiente = None;
+                    dibujo_pendiente = None;
+                    camara_anterior = None;
+                    regulador_media = presupuesto;
+                }
+            }
+        }
+
         if perfil {
+            let entero = perfil_cuadro.elapsed().as_secs_f32() * 1000.0;
             perfil_suma[0] += ms_escena;
             perfil_suma[1] += ms_trazado + ms_acumular + ms_subida;
-            perfil_suma[2] += perfil_cuadro.elapsed().as_secs_f32() * 1000.0;
-            if cuadros % 120 == 0 {
-                let n = 120.0;
+            perfil_suma[2] += entero;
+            perfil_peor = perfil_peor.max(entero);
+            if cuadros % 60 == 0 {
+                let n = 60.0;
                 println!(
-                    "perfil: escena {:.1} ms | trazado+subida {:.1} ms | cuadro entero {:.1} ms",
+                    "perfil: t={:5.1} s | calidad {} | escena {:.1} ms | trazado+subida {:.1} ms | cuadro entero {:.1} ms | peor {:.1} ms",
+                    tiempo,
+                    calidad(),
                     perfil_suma[0] / n,
                     perfil_suma[1] / n,
-                    perfil_suma[2] / n
+                    perfil_suma[2] / n,
+                    perfil_peor
                 );
                 perfil_suma = [0.0; 3];
+                perfil_peor = 0.0;
             }
         }
 

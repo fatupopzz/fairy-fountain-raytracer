@@ -65,6 +65,12 @@ uniform float grainAmount;
 // ruido se congela y se ve como suciedad pegada a la pantalla.
 uniform float time;
 
+// EL DESTELLO DE LENTE del sol del amanecer: donde esta el sol en la
+// pantalla (en las mismas UV que los god rays) y cuanto destella (0 de
+// noche, o con el sol fuera de cuadro).
+uniform vec2 solPantalla;
+uniform float solFuerza;
+
 // Desenfoque minimo en toda la imagen, en UV.
 //
 // BAJO a la mitad (era 0.0010, casi un pixel a 800). El filtro difusor de
@@ -246,6 +252,41 @@ void main() {
         // modo pantalla se derraman sobre lo que hay sin borrarlo.
         vec3 rayas = clamp(estela * streak * ESTELA_TINTE, 0.0, 1.0);
         color = 1.0 - (1.0 - color) * (1.0 - rayas);
+    }
+
+    // EL DESTELLO DE LENTE, como en los atardeceres del juego: un brillo
+    // alrededor del sol, discos de colores sobre la linea que va del sol al
+    // centro del cuadro (los reflejos entre las lentes), y un ARCO de arco
+    // iris del otro lado. Si algo tapa el sol (la profundidad en ese punto
+    // no es la del cielo) se apaga casi entero. En modo pantalla, como las
+    // estelas.
+    if (solFuerza > 0.001) {
+        vec2 aspecto = vec2(4.0 / 3.0, 1.0);
+        float tapado = texture(depthTex, vec2(solPantalla.x, 1.0 - solPantalla.y)).a >= 0.99 ? 1.0 : 0.15;
+        vec2 hacia_centro = vec2(0.5) - solPantalla;
+        vec3 destello = vec3(0.0);
+        // El brillo alrededor del sol.
+        float ds = length((uv - solPantalla) * aspecto);
+        destello += vec3(1.0, 0.85, 0.55) * exp(-ds * ds / 0.015) * 0.35;
+        // Los discos: cuatro, de tamanos y colores distintos.
+        for (int k = 0; k < 4; k++) {
+            float donde = 0.55 + float(k) * 0.42;
+            vec2 centro = solPantalla + hacia_centro * donde;
+            float radio = 0.022 + 0.018 * float(k);
+            float dd = length((uv - centro) * aspecto);
+            float disco = 1.0 - smoothstep(radio * 0.6, radio, dd);
+            vec3 tinte = k == 0 ? vec3(1.0, 0.8, 0.4) : k == 1 ? vec3(0.5, 1.0, 0.6) : k == 2 ? vec3(0.6, 0.7, 1.0) : vec3(1.0, 0.6, 0.9);
+            destello += disco * tinte * 0.09;
+        }
+        // El arco de arco iris.
+        vec2 centro_arco = vec2(0.5) + hacia_centro * 0.7;
+        float t = (length((uv - centro_arco) * aspecto) - 0.30) / 0.03;
+        if (abs(t) < 1.0) {
+            vec3 arco = 0.5 + 0.5 * cos(6.2831 * (t * 0.45 + vec3(0.0, 0.33, 0.67)));
+            destello += arco * (1.0 - t * t) * 0.08;
+        }
+        destello = clamp(destello * solFuerza * tapado, 0.0, 1.0);
+        color = 1.0 - (1.0 - color) * (1.0 - destello);
     }
 
     // Vinieta: los bordes se apagan apenas. El 0.7 controla cuanto: con
