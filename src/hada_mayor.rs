@@ -51,7 +51,6 @@ enum H {
     Traje,
     Pelo,
     Botas,
-    Rojo,
     /// Las puntas de las coletas: mas claras y encendidas, como la punta de
     /// una llama.
     PeloPunta,
@@ -95,31 +94,132 @@ struct Pose {
     tiempo: f32,
     /// Donde estan las dos manos, en su sistema de pie.
     manos: [Vec3; 2],
-    /// La risa: cuanto echa la cabeza hacia atras (0 a 1).
-    risa: f32,
+    /// La cabeza: guinada, cabeceo (negativo, hacia atras: la risa) y
+    /// alabeo.
+    cabeza: (f32, f32, f32),
     /// Cuanto se abren las coletas, como llamas avivadas (0 a 1).
     llamas: f32,
-    /// El pataleo: fase de las piernas, que se mueven alternadas al compas.
+    /// Las piernas: la fase del pataleo y cuanto patalea.
     patada: f32,
+    pataleo: f32,
     /// La risa sacude los hombros: un temblor rapido y chico.
     temblor: f32,
 }
 
-/// LAS POSES DE LOS BRAZOS, como posiciones de las dos manos en su sistema
-/// de pie. Cambia de pose en cada compas de la cancion, y en
-/// la bendicion abre los brazos en cruz sobre Link, como en el juego.
-const POSES: [[(f32, f32, f32); 2]; 4] = [
-    // Una mano adelante y la otra detras de la cabeza.
-    [(-0.44, 1.32, 0.30), (0.30, 2.50, -0.05)],
-    // Las dos arriba.
-    [(-0.30, 2.55, 0.12), (0.30, 2.55, 0.12)],
-    // Una mano tendida hacia Link.
-    [(-0.35, 1.70, 0.62), (0.30, 2.50, -0.05)],
-    // Los brazos abiertos a los costados.
-    [(-0.62, 2.05, 0.30), (0.62, 2.05, 0.30)],
-];
+/// UN MOVIMIENTO DE SU BAILE: donde van las manos (en su sistema de pie),
+/// como lleva la cabeza, cuanto se rie, cuanto se abren las coletas, cuanto
+/// patalea, y como lleva el cuerpo entero (guinada y alabeo).
+#[derive(Clone, Copy)]
+struct Mov {
+    manos: [(f32, f32, f32); 2],
+    cabeza: (f32, f32, f32),
+    risa: f32,
+    llamas: f32,
+    pataleo: f32,
+    cuerpo: (f32, f32),
+    /// Cuanto aletean los brazos, como alas lentas (0 a 1).
+    aleteo: f32,
+}
+
+const ARRIBA: Mov = Mov {
+    manos: [(-0.30, 2.55, 0.12), (0.30, 2.55, 0.12)],
+    cabeza: (0.0, -0.25, 0.0),
+    risa: 0.3,
+    llamas: 1.0,
+    pataleo: 0.6,
+    cuerpo: (0.0, 0.0),
+    aleteo: 0.0,
+};
+/// LA RISA del juego: una mano en la boca, la otra en la cadera, la cabeza
+/// echada atras y los hombros sacudiendose.
+const RIE: Mov = Mov {
+    manos: [(-0.10, 2.10, 0.26), (0.34, 1.30, 0.06)],
+    cabeza: (0.25, -0.45, 0.15),
+    risa: 1.0,
+    llamas: 0.7,
+    pataleo: 1.0,
+    cuerpo: (-0.35, 0.10),
+    aleteo: 0.0,
+};
+/// Le tiende una mano a Link, con la otra detras de la cabeza.
+const SALUDA: Mov = Mov {
+    manos: [(-0.35, 1.72, 0.62), (0.30, 2.50, -0.05)],
+    cabeza: (-0.25, 0.10, -0.12),
+    risa: 0.2,
+    llamas: 0.5,
+    pataleo: 0.5,
+    cuerpo: (0.30, -0.08),
+    aleteo: 0.0,
+};
+/// Junta las manos delante del pecho: esta juntando el poder.
+const JUNTA: Mov = Mov {
+    manos: [(-0.05, 1.78, 0.34), (0.05, 1.78, 0.34)],
+    cabeza: (0.0, 0.22, 0.0),
+    risa: 0.0,
+    llamas: 0.3,
+    pataleo: 0.2,
+    cuerpo: (0.0, 0.0),
+    aleteo: 0.0,
+};
 /// Los brazos en cruz de la bendicion.
-const EN_CRUZ: [(f32, f32, f32); 2] = [(-0.95, 2.02, 0.12), (0.95, 2.02, 0.12)];
+const CRUZ: Mov = Mov {
+    manos: [(-0.95, 2.02, 0.12), (0.95, 2.02, 0.12)],
+    cabeza: (0.0, 0.18, 0.0),
+    risa: 0.0,
+    llamas: 1.0,
+    pataleo: 0.3,
+    cuerpo: (0.0, 0.0),
+    aleteo: 0.0,
+};
+/// La cruz, pero los brazos suben y bajan despacio, como alas.
+const ALAS: Mov = Mov {
+    manos: [(-0.85, 1.90, 0.02), (0.85, 1.90, 0.02)],
+    cabeza: (0.0, -0.10, 0.0),
+    risa: 0.3,
+    llamas: 1.0,
+    pataleo: 0.4,
+    cuerpo: (0.0, 0.0),
+    aleteo: 1.0,
+};
+/// Se inclina hacia Link con las dos manos tendidas hacia el.
+const OFRECE: Mov = Mov {
+    manos: [(-0.30, 1.62, 0.62), (0.30, 1.62, 0.62)],
+    cabeza: (0.0, 0.32, 0.0),
+    risa: 0.0,
+    llamas: 0.6,
+    pataleo: 0.3,
+    cuerpo: (0.0, 0.0),
+    aleteo: 0.0,
+};
+/// Una mano al cielo y la otra hacia Link: el poder pasa por ella.
+const PASA: Mov = Mov {
+    manos: [(-0.25, 2.60, 0.05), (0.45, 1.65, 0.55)],
+    cabeza: (-0.15, -0.30, 0.10),
+    risa: 0.5,
+    llamas: 1.0,
+    pataleo: 0.7,
+    cuerpo: (-0.20, 0.06),
+    aleteo: 0.0,
+};
+
+/// LA COREOGRAFIA, en segundos desde que empieza a salir del agua. No va al
+/// compas: cada movimiento dura lo que dura una frase de la cancion, y pasa
+/// al siguiente en un segundo, como alguien que baila y no un metronomo.
+/// Despues del ultimo vuelve a repetir los de la bendicion.
+const COREOGRAFIA: [(f32, Mov); 10] = [
+    (0.0, ARRIBA),
+    (3.2, RIE),
+    (6.0, SALUDA),
+    (8.3, JUNTA),
+    (10.0, CRUZ),
+    (13.6, ALAS),
+    (17.4, OFRECE),
+    (20.2, PASA),
+    (23.0, CRUZ),
+    (26.0, ARRIBA),
+];
+/// Desde cual se repite si dura mas.
+const REPITE_DESDE: usize = 4;
 
 fn hash(n: u32, k: u32) -> f32 {
     let mut x = n.wrapping_mul(0x9e37_79b9) ^ k.wrapping_mul(0x85eb_ca6b);
@@ -129,38 +229,80 @@ fn hash(n: u32, k: u32) -> f32 {
     ((x >> 16) & 0xFFFF) as f32 / 65535.0
 }
 
+fn mezclar(a: &Mov, b: &Mov, x: f32) -> Mov {
+    let l = |a: f32, b: f32| a + (b - a) * x;
+    let l3 = |a: (f32, f32, f32), b: (f32, f32, f32)| (l(a.0, b.0), l(a.1, b.1), l(a.2, b.2));
+    Mov {
+        manos: [l3(a.manos[0], b.manos[0]), l3(a.manos[1], b.manos[1])],
+        cabeza: l3(a.cabeza, b.cabeza),
+        risa: l(a.risa, b.risa),
+        llamas: l(a.llamas, b.llamas),
+        pataleo: l(a.pataleo, b.pataleo),
+        cuerpo: (l(a.cuerpo.0, b.cuerpo.0), l(a.cuerpo.1, b.cuerpo.1)),
+        aleteo: l(a.aleteo, b.aleteo),
+    }
+}
+
+/// El movimiento de este instante, ya mezclado con el anterior.
+fn movimiento(p: &SceneParams) -> Mov {
+    let edad = p.hada_edad.max(0.0);
+    let n = COREOGRAFIA.len();
+    let fin = COREOGRAFIA[n - 1].0;
+    // Pasado el ultimo, se repiten los de la bendicion.
+    let e = if edad > fin + 3.0 {
+        let desde = COREOGRAFIA[REPITE_DESDE].0;
+        desde + (edad - fin - 3.0) % (fin - desde)
+    } else {
+        edad
+    };
+    let i = COREOGRAFIA.iter().rposition(|(t, _)| *t <= e).unwrap_or(0);
+    let (t0, ahora) = COREOGRAFIA[i];
+    let antes = if i == 0 { ARRIBA } else { COREOGRAFIA[i - 1].1 };
+    mezclar(&antes, &ahora, suave((e - t0) / 1.1))
+}
+
 /// La pose del hada en este instante de la cancion.
+///
+/// Lo grande lo decide la coreografia (`movimiento`); lo chico, que esta
+/// viva: las manos dibujan curvas lentas con periodos que no coinciden entre
+/// si ni con el compas, la cabeza sigue un poco a las manos, respira. Asi
+/// nunca repite el mismo gesto y no se mueve al mismo tiempo que Link, que
+/// si marca el compas.
 fn pose_de(p: &SceneParams) -> Pose {
     let t = p.tiempo;
-    // Una pose por COMPAS: cuatro tiempos.
-    let frase_largo = p.beat_period.max(0.2) * 4.0;
-    let frase = (t / frase_largo).floor();
-    let dentro = t / frase_largo - frase;
-    let elegir = |f: f32| POSES[(hash(f.max(0.0) as u32, 17) * POSES.len() as f32) as usize % POSES.len()];
-    let (antes, ahora) = (elegir(frase - 1.0), elegir(frase));
-    // Pasa de una pose a la otra en el primer cuarto de la frase.
-    let x = suave(dentro * 4.0);
+    let m = movimiento(p);
     let v = |a: (f32, f32, f32)| Vec3::new(a.0, a.1, a.2);
-    let b = p.bendicion.clamp(0.0, 1.0);
-    let mano = |i: usize| {
-        let frase = v(antes[i]) + (v(ahora[i]) - v(antes[i])) * x;
-        frase + (v(EN_CRUZ[i]) - frase) * b
-    };
-    // LOS GESTOS: ademas de cambiar de pose en cada compas, las manos nunca
-    // se quedan quietas. Cada una dibuja un circulo chico al ritmo del tema,
-    // desfasada de la otra, como alguien que habla con las manos.
-    let fase = t / p.beat_period.max(0.2) * PI;
+    let vida = 0.6 + 0.4 * p.swell.clamp(0.0, 1.0);
     let gesto = |i: usize| {
-        let f = fase + i as f32 * 1.7;
-        Vec3::new(0.08 * f.cos(), 0.10 * (f * 0.5).sin(), 0.06 * f.sin()) * (1.0 - 0.6 * b)
+        let k = i as f32;
+        Vec3::new(
+            0.06 * (t * (0.71 + 0.13 * k) + k * 2.1).sin(),
+            0.07 * (t * (0.53 + 0.17 * k) + k * 0.7).sin(),
+            0.05 * (t * (0.89 - 0.11 * k) + k * 1.3).cos(),
+        ) * vida
     };
+    // El aleteo: los dos brazos a la vez, lento, bajando rapido y subiendo
+    // despacio como un ala.
+    let ala = {
+        let f = (t * 1.3).sin();
+        (f + 0.35 * (t * 2.6).sin()) * 0.28 * m.aleteo
+    };
+    let manos = [0, 1].map(|i| v(m.manos[i]) + gesto(i) + Vec3::new(0.0, ala, 0.0));
+    // La cabeza sigue a la mano de adelante, apenas.
+    let mira = (manos[0].x + manos[1].x) * 0.15;
+    let risa_viva = m.risa * (0.75 + 0.25 * (t * 1.9).sin());
     Pose {
         tiempo: t,
-        manos: [mano(0) + gesto(0), mano(1) + gesto(1)],
-        risa: p.pulso * (1.0 - 0.5 * b),
-        llamas: p.pulso + 0.4 * b,
-        patada: fase * 0.5,
-        temblor: p.pulso * (t * 38.0).sin() * (1.0 - b),
+        manos,
+        cabeza: (
+            m.cabeza.0 + mira + 0.10 * (t * 0.37).sin(),
+            m.cabeza.1 - 0.25 * risa_viva + 0.04 * (t * 0.61).sin(),
+            m.cabeza.2 + 0.06 * (t * 0.45).sin(),
+        ),
+        llamas: m.llamas * (0.7 + 0.3 * p.swell.clamp(0.0, 1.0)),
+        patada: t * 2.1,
+        pataleo: m.pataleo,
+        temblor: m.risa * (t * 31.0).sin(),
     }
 }
 
@@ -187,7 +329,7 @@ fn piezas(pose: &Pose) -> (Vec<Pieza>, Vec<usize>) {
 
     // ---- LA CABEZA ----
     // Inclinada hacia atras y de costado: se esta riendo.
-    let cabeza = raiz.hijo(Vec3::new(0.0, 2.0, 0.0), ejes_de(0.15 * (t * 0.7).sin(), -0.20 - 0.30 * pose.risa, 0.12));
+    let cabeza = raiz.hijo(Vec3::new(0.0, 2.0, 0.0), ejes_de(pose.cabeza.0, pose.cabeza.1, pose.cabeza.2));
     let mut cara = caja(&cabeza, Vec3::new(0.0, 0.16, 0.01), Vec3::new(0.28, 0.33, 0.28), recto, H::Piel);
     cara.cara = true;
     v.push(cara);
@@ -195,6 +337,36 @@ fn piezas(pose: &Pose) -> (Vec<Pieza>, Vec<usize>) {
     v.push(caja(&cabeza, Vec3::new(0.0, 0.18, -0.14), Vec3::new(0.32, 0.30, 0.10), recto, H::Pelo));
     for lado in [-1.0f32, 1.0] {
         v.push(caja(&cabeza, Vec3::new(lado * 0.15, 0.20, 0.08), Vec3::new(0.06, 0.24, 0.10), recto, H::Pelo));
+    }
+    // EL FLEQUILLO EN PICO, como el del modelo del juego: dos mechones que
+    // bajan en diagonal desde las sienes y se juntan en punta sobre la
+    // frente. Sin el, la cara era un bloque de piel con mucha frente.
+    for lado in [-1.0f32, 1.0] {
+        v.push(caja(
+            &cabeza,
+            Vec3::new(lado * 0.075, 0.268, 0.152),
+            Vec3::new(0.19, 0.095, 0.035),
+            ejes_de(0.0, 0.0, lado * 0.42),
+            H::Pelo,
+        ));
+    }
+    // LAS OREJAS en punta, largas, hacia afuera y arriba, como en el juego.
+    for lado in [-1.0f32, 1.0] {
+        let giro = ejes_de(lado * (PI / 2.0 + 0.25), -0.45, 0.0);
+        let hacia = llevar(&giro, &Vec3::new(0.0, 0.0, 1.0));
+        let pivote = Vec3::new(lado * 0.14, 0.15, 0.0);
+        v.push(caja(&cabeza, pivote + hacia * 0.07, Vec3::new(0.03, 0.08, 0.14), giro, H::Piel));
+        v.push(caja(&cabeza, pivote + hacia * 0.17, Vec3::new(0.022, 0.04, 0.09), giro, H::Piel));
+    }
+    // Y los mechones de los costados, largos, enmarcando la cara.
+    for lado in [-1.0f32, 1.0] {
+        v.push(caja(
+            &cabeza,
+            Vec3::new(lado * 0.135, 0.10, 0.13),
+            Vec3::new(0.045, 0.24, 0.05),
+            ejes_de(0.0, 0.0, -lado * 0.10),
+            H::Pelo,
+        ));
     }
     // El mono en la coronilla, de donde nacen las coletas.
     v.push(caja(&cabeza, Vec3::new(0.0, 0.45, -0.05), Vec3::new(0.22, 0.13, 0.22), ejes_de(PI / 4.0, 0.0, 0.0), H::Pelo));
@@ -217,6 +389,16 @@ fn piezas(pose: &Pose) -> (Vec<Pieza>, Vec<usize>) {
             h = h.hijo(Vec3::new(0.0, largo * 0.9, 0.0), ejes_de(onda * 0.5, -0.18 + onda * 0.4, -lado * 0.12));
         }
     }
+    // LA TERCERA COLETA, como en el juego: del mono, hacia arriba y atras.
+    let mut h = cabeza.hijo(Vec3::new(0.0, 0.48, -0.08), ejes_de(0.0, -0.75 - 0.25 * pose.llamas, 0.0));
+    for k in 0..5 {
+        let ancho = 0.20 - k as f32 * 0.03;
+        let largo = 0.25;
+        let mat = if k >= 3 { H::PeloPunta } else { H::Pelo };
+        v.push(caja(&h, Vec3::new(0.0, largo * 0.5, 0.0), Vec3::new(ancho, largo, ancho * 0.8), recto, mat));
+        let onda = (t * 2.2 - k as f32 * 0.8 + 0.5).sin() * 0.2;
+        h = h.hijo(Vec3::new(0.0, largo * 0.9, 0.0), ejes_de(onda * 0.6, -0.22 + onda * 0.3, 0.0));
+    }
 
     cortes.push(v.len());
     // ---- LOS BRAZOS ----
@@ -232,7 +414,7 @@ fn piezas(pose: &Pose) -> (Vec<Pieza>, Vec<usize>) {
         let mano = hombro + hacia_mano * (0.68 / hacia_mano.norm().max(0.68));
         let c = codo(hombro, mano, 0.36, 0.34, Vec3::new(lado, -0.6, -0.3));
         v.push(tramo(hombro, c, 0.10, H::Piel));
-        v.push(tramo(hombro - Vec3::new(0.0, 0.02, 0.0), hombro + (c - hombro) * 0.55, 0.16, H::Rojo));
+        v.push(tramo(hombro - Vec3::new(0.0, 0.02, 0.0), hombro + (c - hombro) * 0.55, 0.13, H::Traje));
         v.push(tramo(c, mano, 0.09, H::Piel));
         // La pulsera de enredadera y la mano.
         let hacia = (mano - c) / (mano - c).norm().max(1e-4);
@@ -247,7 +429,7 @@ fn piezas(pose: &Pose) -> (Vec<Pieza>, Vec<usize>) {
     // marron, altas hasta la rodilla.
     // Y PATALEA: las rodillas suben y bajan alternadas al compas, y los
     // pies van atras de las rodillas, como quien flota en el agua.
-    let (pa, pb) = (pose.patada.sin(), (pose.patada + PI).sin());
+    let (pa, pb) = (pose.patada.sin() * pose.pataleo, (pose.patada * 0.83 + PI).sin() * pose.pataleo);
     let pies = [
         (Vec3::new(-0.13, 0.64 + 0.10 * pa, 0.10 + 0.14 * pa), Vec3::new(-0.14, 0.08 + 0.06 * pa, 0.0 - 0.10 * pa)),
         (Vec3::new(0.16, 0.70 + 0.10 * pb, 0.22 + 0.12 * pb), Vec3::new(0.12, 0.20 + 0.06 * pb, -0.14 - 0.10 * pb)),
@@ -280,77 +462,81 @@ pub struct HadaMayorViva {
 /// Cuantas chispas hay.
 const CHISPAS: usize = 18;
 
-fn textura_piel() -> TextureImage {
-    let ruido = campo_fbm(64, 5, 3, 301);
-    TextureImage::pintada(64, 64, move |u, v| {
-        let n = ruido[((v * 63.0) as usize) * 64 + (u * 63.0) as usize];
-        let k = 0.95 + 0.08 * n;
-        [1.0 * k, 0.88 * k, 0.86 * k]
-    })
-}
-
-/// El traje: hojas verdes en capas, como escamas, todas con la punta hacia
-/// abajo, sobre los tallos oscuros de la enredadera. Cada hoja tiene su
-/// nervadura y se aclara hacia la punta, con un toque dorado: de lejos se
-/// lee un verde primavera ordenado, de cerca hojas sueltas.
-fn textura_traje() -> TextureImage {
-    TextureImage::pintada(128, 128, |u, v| {
-        let hash = |x: i32, y: i32, k: u32| {
-            let mut h = (x as u32).wrapping_mul(374_761_393) ^ (y as u32).wrapping_mul(668_265_263) ^ k.wrapping_mul(2_246_822_519);
-            h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
-            ((h ^ (h >> 16)) & 0xFFFF) as f32 / 65535.0
-        };
-        let (gx, gy) = (u * 5.0, v * 5.0);
-        // Entre hoja y hoja, el tallo de la enredadera.
-        let mut color = [0.16, 0.30, 0.14];
-        // Las filas se pintan de arriba hacia abajo, y cada fila tapa a la
-        // de arriba: eso las superpone como tejas. Las filas impares van
-        // corridas media hoja.
-        for dy in [-1i32, 0] {
-            let fila = gy.floor() as i32 + dy;
-            let corre = if fila.rem_euclid(2) == 1 { 0.5 } else { 0.0 };
-            for dx in -1..=1 {
-                let col = (gx - corre).floor() as i32 + dx;
-                let cx = col as f32 + 0.5 + corre + (hash(col, fila, 1) - 0.5) * 0.15;
-                let cy = fila as f32 + 0.55;
-                // Cada hoja apenas torcida, para que no quede una grilla.
-                let giro = (hash(col, fila, 3) - 0.5) * 0.7;
-                let (sg, cg) = giro.sin_cos();
-                let (px, py) = (gx - cx, gy - cy);
-                let (a, b) = (px * cg + py * sg, -px * sg + py * cg);
-                // Una hoja en gota: ancha arriba y en punta abajo.
-                let t = (b + 0.55) / 1.2;
-                if !(0.0..1.0).contains(&t) {
-                    continue;
-                }
-                let ancho = 0.52 * (t * PI).sin().powf(0.7) * (1.0 - 0.35 * t);
-                if a.abs() < ancho {
-                    let tono = hash(col, fila, 4);
-                    let nervio = if a.abs() < 0.035 { 0.8 } else { 1.0 };
-                    let borde = 0.8 + 0.2 * (1.0 - a.abs() / ancho);
-                    let k = (0.75 + 0.45 * t) * nervio * borde;
-                    color = [
-                        (0.30 + 0.12 * tono + 0.10 * t) * k,
-                        (0.66 + 0.14 * tono) * k,
-                        (0.22 + 0.08 * tono) * k,
-                    ];
-                }
-            }
+/// LA HIEDRA que la envuelve, como en el juego: tallos verde oscuro que
+/// suben ondulando, con hojitas amarillo verdosas alternadas a cada lado.
+/// `tallos` es cuantos hay a lo ancho de la textura. Devuelve el color si en
+/// (u, v) hay tallo u hoja.
+fn hiedra(u: f32, v: f32, tallos: usize, semilla: u32) -> Option<[f32; 3]> {
+    for k in 0..tallos {
+        let kf = k as f32;
+        let fase = hash(k as u32, semilla) * 6.3;
+        let base = (kf + 0.5 + (hash(k as u32, semilla + 1) - 0.5) * 0.5) / tallos as f32;
+        let x = base + 0.07 * (v * 2.0 * PI * 1.5 + fase).sin() + 0.03 * (v * 2.0 * PI * 4.0 + fase).sin();
+        let dx = ((u - x + 0.5).rem_euclid(1.0)) - 0.5;
+        if dx.abs() < 0.014 {
+            return Some([0.10, 0.22, 0.07]);
         }
-        color
+        // Las hojas: cada tanto, alternadas a un lado y al otro del tallo.
+        let paso = 0.085;
+        let fila = (v / paso).floor();
+        let lado = if (fila as i32).rem_euclid(2) == 0 { 1.0 } else { -1.0 };
+        let (cx, cy) = (lado * 0.042, (fila + 0.5) * paso);
+        let (a, b) = ((dx - cx) / 0.046, (v - cy) / 0.032);
+        let d = a * a + b * b;
+        if d < 1.0 {
+            let borde = if d > 0.65 { 0.55 } else { 1.0 };
+            let vena = if (a * 0.6 - b).abs() < 0.12 { 0.8 } else { 1.0 };
+            let k = borde * vena;
+            return Some([0.78 * k, 0.84 * k, 0.22 * k]);
+        }
+    }
+    None
+}
+
+/// La piel del hada del juego: verde amarillenta y palida, con alguna rama
+/// de hiedra suelta.
+fn textura_piel() -> TextureImage {
+    let ruido = campo_fbm(128, 5, 3, 301);
+    TextureImage::pintada(128, 128, move |u, v| {
+        let n = ruido[((v * 127.0) as usize) * 128 + (u * 127.0) as usize];
+        if let Some(c) = hiedra(u, v, 1, 71) {
+            return c;
+        }
+        let k = 0.94 + 0.10 * n;
+        [0.80 * k, 0.90 * k, 0.42 * k]
     })
 }
 
+/// El "traje": como en el juego es casi piel, un corpino claro cubierto de
+/// hiedra tupida.
+fn textura_traje() -> TextureImage {
+    let ruido = campo_fbm(128, 5, 3, 307);
+    TextureImage::pintada(128, 128, move |u, v| {
+        let n = ruido[((v * 127.0) as usize) * 128 + (u * 127.0) as usize];
+        if let Some(c) = hiedra(u, v, 4, 13) {
+            return c;
+        }
+        let k = 0.92 + 0.10 * n;
+        [0.86 * k, 0.90 * k, 0.50 * k]
+    })
+}
+
+/// El pelo: rojo carmesi, con mechones y hiedra enredada; las puntas, mas
+/// claras, como una llama.
 fn textura_pelo(punta: bool) -> TextureImage {
     let ruido = campo_fbm(64, 4, 3, 311);
     TextureImage::pintada(64, 64, move |u, v| {
         let n = ruido[((v * 63.0) as usize) * 64 + (u * 63.0) as usize];
+        if !punta {
+            if let Some(c) = hiedra(u, v, 1, 29) {
+                return c;
+            }
+        }
         let veta = 0.75 + 0.25 * ((u * 36.0 + n * 7.0).sin() * 0.5 + 0.5);
         if punta {
-            // Hacia la punta, del magenta al rosa claro.
-            [1.0 * veta, (0.35 + 0.15 * v) * veta, (0.62 + 0.1 * v) * veta]
+            [1.0 * veta, (0.30 + 0.15 * v) * veta, (0.32 + 0.1 * v) * veta]
         } else {
-            [0.95 * veta, 0.16 * veta, 0.42 * veta]
+            [0.86 * veta, 0.10 * veta, 0.18 * veta]
         }
     })
 }
@@ -368,68 +554,103 @@ fn textura_botas() -> TextureImage {
     })
 }
 
-/// La cara: ojos grandes con pestanas largas y sombra violeta, cejas finas,
-/// labios rojos. Es la cara maquillada del Hada Mayor del juego.
+/// LA CARA del Hada Mayor de Ocarina, sacada de la captura del juego: piel
+/// verde amarillenta, ojos grandes mirando de reojo con el iris violeta,
+/// sombra ROJA muy marcada hasta unas cejas rojas y gruesas, labios morados
+/// en una sonrisa, y la barbilla en punta (la cabeza es un cubo: la punta
+/// se hace con sombra en las esquinas de abajo). Se pinta en coordenadas
+/// corregidas por la proporcion de la cabeza, para que lo redondo salga
+/// redondo.
 fn textura_cara() -> TextureImage {
-    TextureImage::pintada(128, 128, |u, v| {
-        let lado = 1.0 - 0.22 * ((u - 0.5) * 2.0).powi(4);
-        let mut c = [1.0 * lado, 0.88 * lado, 0.86 * lado];
-        // El rubor, rosa, en las mejillas.
-        for cx in [0.24f32, 0.76] {
-            let d = ((u - cx).powi(2) + (v - 0.66).powi(2)).sqrt();
-            let k = (1.0 - d / 0.11).clamp(0.0, 1.0) * 0.30;
-            c = [c[0], c[1] * (1.0 - k), c[2] * (1.0 - k * 0.6)];
+    const ASPECTO: f32 = 0.33 / 0.28;
+    TextureImage::pintada(256, 256, |u, v| {
+        let y = v * ASPECTO;
+        let mezcla = |c: [f32; 3], d: [f32; 3], k: f32| {
+            let k = k.clamp(0.0, 1.0);
+            [c[0] + (d[0] - c[0]) * k, c[1] + (d[1] - c[1]) * k, c[2] + (d[2] - c[2]) * k]
+        };
+        let lado = 1.0 - 0.18 * ((u - 0.5) * 2.0).powi(4);
+        let mut c = [0.80 * lado, 0.90 * lado, 0.42 * lado];
+
+        // LA BARBILLA EN PUNTA: debajo de la boca, las esquinas se hunden en
+        // sombra y queda una V de piel.
+        let v_menton = (u - 0.5).abs() - (1.0 - v) * 1.35;
+        if v > 0.70 && v_menton > 0.0 {
+            c = mezcla(c, [0.30, 0.36, 0.16], (v_menton / 0.06).min(1.0) * 0.85);
         }
-        for (cx, s) in [(0.31f32, -1.0f32), (0.69, 1.0)] {
-            // La sombra de ojos, violeta, arriba del ojo.
-            let (sx, sy) = ((u - cx) / 0.15, (v - 0.43) / 0.07);
-            if sx * sx + sy * sy < 1.0 {
-                c = [0.75, 0.45, 0.85];
-            }
-            let (dx, dy) = ((u - cx) / 0.12, (v - 0.50) / 0.075);
-            let dy = dy + dx * s * 0.08;
-            let r = dx * dx + dy * dy;
-            if r < 1.0 {
-                c = [0.98, 0.98, 0.95];
-                let (ix, iy) = ((u - cx) / 0.055, (v - 0.505) / 0.065);
-                if ix * ix + iy * iy < 1.0 {
-                    // El iris violeta, mas claro abajo, como un ojo que brilla.
-                    let k = 0.7 + 0.5 * iy.max(0.0);
-                    c = [0.45 * k, 0.22 * k, 0.70 * k];
-                    if ix * ix + iy * iy < 0.3 {
-                        c = [0.05, 0.02, 0.06];
-                    }
-                    if ((u - cx + 0.015) / 0.013).powi(2) + ((v - 0.49) / 0.013).powi(2) < 1.0 {
-                        c = [1.0, 1.0, 1.0];
-                    }
-                }
-            } else if r < 1.6 && dy < 0.2 {
-                c = [0.10, 0.04, 0.08];
-            }
-            // Las pestanas: tres rayitas hacia afuera y arriba.
-            for k in 0..3 {
-                let ang = 0.5 + k as f32 * 0.35;
-                let (bx, by) = (cx + s * 0.11, 0.47 - k as f32 * 0.012);
-                let (px, py) = (u - bx, v - by);
-                let a = px * s * ang.cos() - py * ang.sin();
-                let b = px * s * ang.sin() + py * ang.cos();
-                if (0.0..0.05).contains(&a) && b.abs() < 0.007 {
-                    c = [0.10, 0.04, 0.08];
+
+        let (ojo_y, ancho, alto) = (0.64f32, 0.105f32, 0.070f32);
+        for (cx, s) in [(0.30f32, -1.0f32), (0.70, 1.0)] {
+            // La sombra roja, grande, del ojo a la ceja, esfumada.
+            {
+                let dx = (u - cx - s * 0.01) / 0.15;
+                let dy = (y - (ojo_y - 0.06)) / 0.085;
+                let d = dx * dx + dy * dy;
+                if d < 1.0 && y < ojo_y + 0.01 {
+                    c = mezcla(c, [0.84, 0.10, 0.20], (1.0 - d).powf(0.45) * 1.1);
                 }
             }
-            // La ceja, fina, alta y arqueada: dulce, no enojada.
+            let x = (u - cx) / ancho * s;
+            if x.abs() < 1.0 {
+                let curva = (1.0 - x * x).max(0.0);
+                let arriba = ojo_y - alto * curva.powf(0.55) - 0.010 * x.max(0.0);
+                let abajo = ojo_y + alto * 0.75 * curva - 0.010 * x.max(0.0);
+                if y > arriba && y < abajo {
+                    c = [0.97, 0.97, 0.94];
+                    // Mira de reojo: el iris corrido hacia la derecha de ella.
+                    let (ix, iy) = ((u - cx - 0.035) / 0.050, (y - ojo_y - 0.004) / 0.056);
+                    let ri = ix * ix + iy * iy;
+                    if ri < 1.0 {
+                        let k = 0.6 + 0.5 * (iy * 0.5 + 0.5);
+                        c = [0.42 * k, 0.20 * k, 0.55 * k];
+                        if ri < 0.25 {
+                            c = [0.05, 0.02, 0.06];
+                        }
+                        let b1 = ((u - cx - 0.020) / 0.013).powi(2) + ((y - ojo_y + 0.020) / 0.013).powi(2);
+                        if b1 < 1.0 {
+                            c = [1.0, 1.0, 1.0];
+                        }
+                    }
+                }
+                // El delineado de arriba, grueso, y la linea de abajo.
+                if y <= arriba && y > arriba - 0.012 {
+                    c = [0.10, 0.03, 0.06];
+                }
+                if y >= abajo && y < abajo + 0.005 {
+                    c = mezcla(c, [0.35, 0.10, 0.15], 0.8);
+                }
+            }
+            // La ceja: roja, gruesa, alta y arqueada.
             let x = (u - cx) / 0.13;
-            let ey = (v - (0.335 - 0.035 * (1.0 - x * x) + s * x * 0.012)) / 0.011;
-            if ((u - cx) / 0.13).abs() < 1.0 && ey.abs() < 1.0 {
-                c = [0.70, 0.12, 0.35];
+            let ey = y - (ojo_y - 0.150 - 0.030 * (1.0 - x * x) + s * x * 0.015);
+            if x.abs() < 1.0 && ey.abs() < 0.016 * (1.0 - 0.6 * x.abs()) {
+                c = [0.72, 0.06, 0.14];
             }
         }
-        // Los labios, rosa fuerte, en una sonrisa: la comisura sube.
-        let x = (u - 0.5) / 0.10;
-        let medio = 0.80 - 0.035 * x * x;
-        let grueso = 0.022 * (1.0 - x * x).max(0.0).sqrt();
-        if x.abs() < 1.0 && (v - medio).abs() < grueso + 0.004 {
-            c = if (v - medio).abs() < 0.004 { [0.45, 0.06, 0.18] } else { [0.92, 0.25, 0.45] };
+
+        // La nariz: una sombra larga y fina.
+        if (u - 0.5).abs() < 0.012 && (0.70..0.80).contains(&y) {
+            c = mezcla(c, [0.55, 0.62, 0.32], 0.5);
+        }
+
+        // LOS LABIOS, morados, en una sonrisa cerrada.
+        {
+            let x = (u - 0.5) / 0.085;
+            let medio = 0.885 - 0.014 * x * x;
+            if x.abs() < 1.0 {
+                let arco = 0.020 * (1.0 - x * x).powf(0.7);
+                let abajo = 0.026 * (1.0 - x * x).powf(0.8);
+                if y > medio - arco && y < medio + abajo {
+                    c = [0.62, 0.12, 0.44];
+                    let brillo = ((u - 0.51) / 0.025).powi(2) + ((y - medio - abajo * 0.45) / 0.007).powi(2);
+                    if brillo < 1.0 {
+                        c = mezcla(c, [0.95, 0.70, 0.90], 1.0 - brillo);
+                    }
+                    if (y - medio).abs() < 0.003 {
+                        c = [0.32, 0.04, 0.22];
+                    }
+                }
+            }
         }
         c
     })
@@ -439,31 +660,24 @@ fn textura_cara() -> TextureImage {
 pub fn armar(objetos: &mut Vec<Box<dyn RayIntersect + Send + Sync>>, luces: &mut Vec<Light>) -> HadaMayorViva {
     let img = |t: TextureImage| Texture::ImageTexture(Arc::new(t), Color::WHITE, (0.0, 0.0));
     let mats = [
-        // La piel brilla apenas, rosada: es un ser de luz, no de carne.
-        Material::new([1.0, 0.25, 0.0, 0.0], 30.0, 0.0, img(textura_piel()), Some(Color::new(16, 8, 12, 255))),
-        Material::new([1.0, 0.30, 0.0, 0.0], 30.0, 0.0, img(textura_traje()), Some(Color::new(4, 12, 4, 255))),
+        // La piel brilla apenas: es un ser de luz, no de carne.
+        Material::new([0.95, 0.06, 0.0, 0.0], 12.0, 0.0, img(textura_piel()), Some(Color::new(10, 12, 4, 255))),
+        Material::new([1.0, 0.30, 0.0, 0.0], 30.0, 0.0, img(textura_traje()), Some(Color::new(8, 10, 3, 255))),
         // El pelo brilla apenas: es lo que la hace leerse magica y no un
         // maniqui, y lo que mas halo le saca al bloom.
-        Material::new([1.0, 0.5, 0.0, 0.0], 40.0, 0.0, img(textura_pelo(false)), Some(Color::new(55, 6, 28, 255))),
+        Material::new([1.0, 0.5, 0.0, 0.0], 40.0, 0.0, img(textura_pelo(false)), Some(Color::new(55, 5, 12, 255))),
         Material::new([1.0, 0.2, 0.0, 0.0], 20.0, 0.0, img(textura_botas()), None),
-        // El pano rojo de los brazos.
-        Material::new(
-            [1.0, 0.35, 0.0, 0.0],
-            25.0,
-            0.0,
-            Texture::Solid(Color::new(220, 50, 110, 255)),
-            None,
-        ),
-        Material::new([1.0, 0.5, 0.0, 0.0], 40.0, 0.0, img(textura_pelo(true)), Some(Color::new(80, 20, 50, 255))),
+        Material::new([1.0, 0.5, 0.0, 0.0], 40.0, 0.0, img(textura_pelo(true)), Some(Color::new(80, 18, 22, 255))),
     ];
-    let cara = Material::new([1.0, 0.25, 0.0, 0.0], 30.0, 0.0, img(textura_cara()), Some(Color::new(16, 8, 12, 255)));
+    let cara = Material::new([0.9, 0.05, 0.0, 0.0], 12.0, 0.0, img(textura_cara()), Some(Color::new(10, 12, 4, 255)));
 
     let reposo = Pose {
         tiempo: 0.0,
         manos: [Vec3::new(-0.44, 1.32, 0.3), Vec3::new(0.3, 2.5, -0.05)],
-        risa: 0.0,
+        cabeza: (0.0, 0.0, 0.0),
         llamas: 0.0,
         patada: 0.0,
+        pataleo: 0.0,
         temblor: 0.0,
     };
     let (todas, cortes) = piezas(&reposo);
@@ -487,7 +701,7 @@ pub fn armar(objetos: &mut Vec<Box<dyn RayIntersect + Send + Sync>>, luces: &mut
     objetos.push(Box::new(GrupoAcotado::new(partes)));
 
     let luz = luces.len();
-    luces.push(Light::new(FLOTA + Vec3::new(0.0, 0.4, 1.4), Color::new(255, 160, 220, 255), 0.0).con_alcance(1.6));
+    luces.push(Light::new(FLOTA + Vec3::new(0.0, 0.4, 1.4), Color::new(255, 160, 220, 255), 0.0).con_alcance(2.4));
 
     // Las chispas, escondidas (tamano cero) hasta que hacen falta.
     let chispa = Material::new(
@@ -511,14 +725,36 @@ pub fn armar(objetos: &mut Vec<Box<dyn RayIntersect + Send + Sync>>, luces: &mut
         Light::new(crate::link::PIES + Vec3::new(0.0, 1.9, 0.6), Color::new(255, 215, 120, 255), 0.0)
             .con_alcance(1.2),
     );
-    // EL RAYO DE LA BENDICION: un haz dorado translucido (suma su luz, no
-    // tapa) que baja de las manos del hada a la cabeza de Link.
+    // EL RAYO DE LA BENDICION: de CADA mano del hada baja un haz dorado a la
+    // mano levantada de Link del mismo lado, con un nucleo fino y un halo
+    // ancho (translucidos: suman su luz, no tapan), y en cada mano del hada
+    // una esfera de luz. Orden: nucleo 0, halo 0, nucleo 1, halo 1, luz de
+    // la mano 0, luz de la mano 1.
     let velo = Material::new([0.0, 0.0, 0.0, 1.0], 1.0, 1.0, Texture::Solid(Color::WHITE), Some(Color::BLACK));
-    let mut haz = crate::cylinder::CilindroOrientado::nuevo(FLOTA, FLOTA + Vec3::new(0.0, 0.1, 0.0), 0.0, 1.0, velo);
-    haz.set_visible(false);
+    let mut rayo_partes: Vec<Box<dyn RayIntersect + Send + Sync>> = Vec::new();
+    for _ in 0..4 {
+        let mut haz = crate::cylinder::CilindroOrientado::nuevo(FLOTA, FLOTA + Vec3::new(0.0, 0.1, 0.0), 0.0, 1.0, velo.clone());
+        haz.set_visible(false);
+        rayo_partes.push(Box::new(haz));
+    }
+    for _ in 0..2 {
+        rayo_partes.push(Box::new(crate::sphere::Sphere { center: FLOTA, radius: 0.0, material: velo.clone() }));
+    }
     let rayo = objetos.len();
-    objetos.push(Box::new(GrupoAcotado::new(vec![Box::new(haz) as Box<dyn RayIntersect + Send + Sync>])));
+    objetos.push(Box::new(GrupoAcotado::new(rayo_partes)));
     HadaMayorViva { grupo, luz, chispas, luz_link, rayo }
+}
+
+/// Las manos levantadas de Link, cada una emparejada con la mano del hada
+/// que le queda del mismo lado (asi los haces no se cruzan).
+fn manos_de_link(manos_hada: &[Vec3; 2]) -> [Vec3; 2] {
+    let izq = crate::link::PIES + Vec3::new(-0.2, 1.68, -0.10);
+    let der = crate::link::PIES + Vec3::new(0.2, 1.68, -0.10);
+    if manos_hada[0].x < manos_hada[1].x {
+        [izq, der]
+    } else {
+        [der, izq]
+    }
 }
 
 fn suave(x: f32) -> f32 {
@@ -538,20 +774,21 @@ pub fn colocacion(p: &SceneParams) -> (Vec3, [Vec3; 3], f32, f32) {
     // vueltas; con toda, arriba, grande y quieta. Sale y entra por el
     // mismo camino, asi que irse es lo mismo al reves.
     let sube = suave(presencia * 1.25);
-    let escala = (0.12 + 0.88 * suave(presencia)) * TAMANIO * (1.0 + 0.025 * p.pulso);
+    let escala = (0.12 + 0.88 * suave(presencia)) * TAMANIO;
     let giro = (1.0 - suave(presencia)) * 3.0 * PI;
     // LA VOLTERETA: mientras sale del agua da una vuelta entera hacia atras,
     // ademas de girar; se completa justo cuando llega arriba.
     let voltereta = (1.0 - suave((presencia - 0.15) / 0.55)) * 2.0 * PI * (presencia > 0.02) as i32 as f32;
-    // Flota, y ademas BAILA: sube en cada golpe y se mece de costado al
-    // compas (un vaiven cada dos tiempos), mas cuando la cancion empuja.
-    let beat = p.beat_period.max(0.2);
-    let vaiven = (t / beat * PI).sin() * (0.35 + 0.65 * p.energia_suave.clamp(0.0, 1.0));
+    // Flota, y ademas BAILA a su aire: se mece y deriva en un ocho lento,
+    // con periodos que no son los del compas (el compas lo marca Link), y
+    // sube cuando la cancion crece.
+    let vaiven = (t * 0.83).sin() * (0.35 + 0.65 * p.energia_suave.clamp(0.0, 1.0));
     let flota = Vec3::new(
-        0.12 * vaiven,
-        0.16 * (t * 0.9).sin() + 0.06 * (t * 2.3).sin() + 0.10 * p.pulso,
-        0.05 * (t * 0.7).cos(),
+        0.12 * vaiven + 0.16 * (t * 0.41).sin(),
+        0.16 * (t * 0.9).sin() + 0.06 * (t * 2.3).sin() + 0.08 * p.swell.clamp(0.0, 1.0),
+        0.05 * (t * 0.7).cos() + 0.07 * (t * 0.82).sin(),
     ) * sube;
+    let m = movimiento(p);
     let base = Vec3::new(0.0, crate::fuente::CUENCO_Y - 1.2, 0.0);
     // Arriba del cuenco, y para bendecir avanza sobre Link.
     let arriba = FLOTA + (BENDICE - FLOTA) * b;
@@ -560,9 +797,9 @@ pub fn colocacion(p: &SceneParams) -> (Vec3, [Vec3; 3], f32, f32) {
     // cinematica, pero quieta en esa pose se leia rara: ahora flota derecha,
     // con las piernas colgando, y lo unico que la inclina es el baile.
     let r = ejes_de(
-        giro + (0.10 * (t * 0.5).sin() + 0.18 * vaiven) * (1.0 - b),
+        giro + m.cuerpo.0 + (0.10 * (t * 0.5).sin() + 0.18 * vaiven) * (1.0 - b),
         -0.12 * b + 0.05 * (t * 0.6).sin() - voltereta,
-        0.07 * (t * 0.8).sin() + 0.08 * vaiven,
+        m.cuerpo.1 + 0.07 * (t * 0.8).sin() + 0.08 * vaiven,
     );
     (donde, r, escala, presencia)
 }
@@ -592,7 +829,7 @@ impl HadaMayorViva {
                     if matches!(pieza.mat, H::Pelo) {
                         let k = 0.6 + 0.4 * p.pulso + 0.3 * p.bendicion;
                         c.material.emission_color =
-                            Some(Color::new((70.0 * k) as u8, (8.0 * k) as u8, (36.0 * k) as u8, 255));
+                            Some(Color::new((70.0 * k) as u8, (6.0 * k) as u8, (14.0 * k) as u8, 255));
                     }
                 }
                 }
@@ -601,10 +838,16 @@ impl HadaMayorViva {
             g.recalcular_caja(0.0);
         }
 
+        // La luz rosa del centro de la fuente (la 1, ver `main.rs`) queda
+        // adentro de su cuerpo cuando esta afuera y le quemaba la piel: sube
+        // por encima de su cabeza mientras flota.
+        if let Some(luz) = luces.get_mut(1) {
+            luz.position = Vec3::new(0.0, 3.0 + 2.8 * suave(presencia), 0.0);
+        }
         // Su luz: rosa, delante de ella, mirandola. Es la que la saca del
         // contraluz de la fuente.
         if let Some(luz) = luces.get_mut(self.luz) {
-            luz.position = donde + Vec3::new(0.0, 0.5, 1.3);
+            luz.position = donde + Vec3::new(0.0, 0.9, 2.2);
             luz.intensity = 1.6 * suave(presencia) * (0.85 + 0.3 * p.pulso);
         }
         // La luz dorada sobre Link mientras recibe el poder.
@@ -613,23 +856,37 @@ impl HadaMayorViva {
         }
 
         // ---- EL RAYO ----
-        let entre_manos = (al_mundo(pose.manos[0]) + al_mundo(pose.manos[1])) * 0.5;
-        let cabeza_link = crate::link::PIES + Vec3::new(0.0, 1.75, 0.0);
+        // De cada mano del hada a la mano de Link del mismo lado (las de
+        // Link estan arriba, abiertas: ver `link::pose_de`). Siguen a las
+        // manos del hada por toda la coreografia.
+        let manos_hada = [al_mundo(pose.manos[0]), al_mundo(pose.manos[1])];
+        let destinos = manos_de_link(&manos_hada);
         if let Some(g) = objetos
             .get_mut(self.rayo)
             .and_then(|o| (o.as_mut() as &mut dyn Any).downcast_mut::<GrupoAcotado>())
         {
             let b = p.bendicion;
-            for hijo in g.children_mut() {
+            for (i, hijo) in g.children_mut().iter_mut().enumerate() {
                 if let Some(c) = (hijo.as_mut() as &mut dyn Any).downcast_mut::<crate::cylinder::CilindroOrientado>() {
                     c.set_visible(b > 0.05);
                     if b > 0.05 {
-                        c.recolocar(cabeza_link, entre_manos);
-                        c.set_radio(0.16 * b * (0.85 + 0.3 * p.pulso));
-                        let k = b * (0.55 + 0.45 * p.pulso);
+                        let mano = i / 2;
+                        let halo = i % 2 == 1;
+                        // El haz respira, cada mano a su tiempo.
+                        let respira = 0.85 + 0.15 * (t * 2.3 + mano as f32 * 1.9).sin();
+                        c.recolocar(destinos[mano], manos_hada[mano]);
+                        c.set_radio(if halo { 0.17 } else { 0.05 } * b * respira);
+                        let k = b * respira * if halo { 0.16 } else { 0.7 };
                         c.material_mut().emission_color =
-                            Some(Color::new((255.0 * k) as u8, (205.0 * k) as u8, (110.0 * k) as u8, 255));
+                            Some(Color::new((255.0 * k) as u8, (215.0 * k) as u8, (130.0 * k) as u8, 255));
                     }
+                } else if let Some(e) = (hijo.as_mut() as &mut dyn Any).downcast_mut::<crate::sphere::Sphere>() {
+                    let mano = i - 4;
+                    let late = 0.85 + 0.15 * (t * 3.1 + mano as f32).sin();
+                    e.center = manos_hada[mano.min(1)];
+                    e.radius = if b > 0.05 { 0.16 * b * late } else { 0.0 };
+                    let k = b * 0.5;
+                    e.material.emission_color = Some(Color::new((255.0 * k) as u8, (225.0 * k) as u8, (160.0 * k) as u8, 255));
                 }
             }
             g.recalcular_caja(0.0);
@@ -641,8 +898,8 @@ impl HadaMayorViva {
         // se zambulle, y la LLUVIA DE LA BENDICION, que cae de sus manos
         // abiertas sobre Link. Todo es funcion de la edad del evento.
         let cuenco = Vec3::new(0.0, crate::fuente::CUENCO_Y, 0.0);
-        let link = crate::link::PIES + Vec3::new(0.0, 1.45, 0.0);
-        let manos = [al_mundo(pose.manos[0]), al_mundo(pose.manos[1])];
+        let manos = manos_hada;
+        let manos_link = destinos;
         let Some(g) = objetos
             .get_mut(self.chispas)
             .and_then(|o| (o.as_mut() as &mut dyn Any).downcast_mut::<GrupoAcotado>())
@@ -668,15 +925,20 @@ impl HadaMayorViva {
                 let vida = 1.0 - e / 1.3;
                 (cuenco + dir * vuelo - Vec3::new(0.0, 2.0 * e * e, 0.0), 0.08 * vida, (150.0, 255.0, 200.0))
             } else if p.bendicion > 0.02 {
-                // Cada chispa recorre su propio arco de una mano a Link,
-                // desfasada de las demas, asi la lluvia es continua.
-                let s = (t * 0.6 + k as f32 / CHISPAS as f32).fract();
-                let desde = manos[k % 2];
-                let medio = (desde + link) * 0.5 + Vec3::new((h(4) - 0.5) * 0.8, 0.6, (h(5) - 0.5) * 0.4);
-                let a = desde + (medio - desde) * s;
-                let b = medio + (link - medio) * s;
+                // Cada chispa baja por uno de los dos haces, de la mano del
+                // hada a la de Link, girando en espiral alrededor del haz,
+                // desfasada de las demas: el poder corre por el rayo.
+                let s = (t * 0.7 + k as f32 / CHISPAS as f32).fract();
+                let lado = k % 2;
+                let (desde, hasta) = (manos[lado], manos_link[lado]);
+                let eje = normalize(&(hasta - desde));
+                let a = normalize(&cross(&eje, &Vec3::new(0.0, 1.0, 0.0)));
+                let b = cross(&eje, &a);
+                let vuelta = s * 3.0 * PI + t * 4.0 + h(4) * 6.0;
+                let radio = 0.09 * (s * PI).sin();
+                let pos = desde + (hasta - desde) * s + (a * vuelta.cos() + b * vuelta.sin()) * radio;
                 let brillo = (s * PI).sin();
-                (a + (b - a) * s, 0.075 * brillo * p.bendicion, (255.0, 220.0, 130.0))
+                (pos, 0.06 * brillo * p.bendicion, (255.0, 225.0, 150.0))
             } else {
                 (cuenco, 0.0, (0.0, 0.0, 0.0))
             };

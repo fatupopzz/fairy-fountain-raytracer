@@ -11,7 +11,7 @@ una **lluvia de brillos** cayendo alrededor de la fuente.
 Parado sobre la Trifuerza, **Link** —hecho de cubos— toca la Ocarina del
 Tiempo mientras **Navi** le da vueltas a la cabeza. Cuando entran las voces, la
 **Gran Hada** sale del cuenco dando una voltereta entre halos de luz, baila en
-el aire, **bendice a Link** con un rayo dorado mientras él levanta los brazos
+el aire, **bendice a Link** con dos haces dorados que bajan de sus manos a las de él
 para recibir el poder, se zambulle, y en el golpe siguiente Link estrena el
 **Fuego de Din**. Todo bajo una **aurora boreal** que se retuerce, pulsa y
 cambia de color con la canción.
@@ -27,8 +27,8 @@ Ni matemática de vectores, ni intersecciones, ni BVH, ni sombreado.
 ## Video
 
 **[▶ Ver el video completo (docs/fuente_de_las_hadas.mp4)](docs/fuente_de_las_hadas.mp4)**
-— la canción entera, 1280×960, grabada con `--video` (54 MB; la versión en
-alta calidad, de 104 MB, se regenera con el mismo comando y no va al repo).
+— la canción entera, en **1440×1080** (1080p), grabada con `--video` (59 MB; la versión en
+alta calidad, de 268 MB, se regenera con el mismo comando y no va al repo).
 
 [![La fuente de noche](docs/portada.jpg)](docs/fuente_de_las_hadas.mp4)
 
@@ -74,9 +74,12 @@ cargo run --release -- --taa          # banco de pruebas del antialiasing tempor
 cargo run --release -- --sin-taa      # apagarlo, para compararlo
 ```
 
-El video no corre en tiempo real: cada cuadro se traza al doble de resolución
-(800×600) con cuatro muestras por píxel y pasa por el mismo post-procesado que
-en vivo; el tiempo lo pone el número de cuadro, así que sale a 30 fps exactos.
+El video no corre en tiempo real: cada cuadro se traza **en alta definición de
+verdad, a 1440×1080**, con dos muestras por píxel (`VIDEO_MUESTRAS` lo cambia),
+y pasa por el mismo post-procesado que en vivo, pero con toda la cadena de la
+GPU trabajando a 1440×1080 y escribiendo en un buffer propio en vez de en la
+ventana de 800×600: nada se estira. El tiempo lo pone el número de cuadro, así
+que sale a 30 fps exactos.
 `VIDEO_DESDE` y `VIDEO_HASTA` recortan un tramo, `BENCH_T=46,96,136` elige qué
 segundos mide `--bench`, y `CAMARA=x,y,z,mx,my,mz` fija la cámara en `--foto`.
 
@@ -86,7 +89,7 @@ segundos mide `--bench`, y `CAMARA=x,y,z,mx,my,mz` fija la cámara en `--foto`.
 
 | | |
 |---|---|
-| **Escena compleja** | Isla flotante de bloques con cascadas, cristales colgantes e islotes; la fuente de Ocarina con piscina hexagonal, pasillo, Trifuerza en el piso, estrado hexagonal en terrazas, flor de loto, antorchas de cono, seis columnas y techo; tres halos toroidales; Link articulado de ~50 cubos con cinemática inversa; la Gran Hada articulada; Navi; notas; haces de cristal; el rayo de la bendición; el Fuego de Din; lluvia de 150 brillos; ~50 hadas y motas; rupias; skybox con aurora y mar de nubes. 262 objetos, 12 luces de color. |
+| **Escena compleja** | Isla flotante de bloques con cascadas, cristales colgantes, islotes, flores, arbustos, cristalitos y pasto que cuelga por los bordes; la fuente de Ocarina con piscina hexagonal, pasillo, Trifuerza en el piso, estrado hexagonal en terrazas, flor de loto, antorchas de cono, seis columnas y techo; tres halos toroidales; Link articulado de ~50 cubos con cinemática inversa; la Gran Hada articulada; Navi; notas; haces de cristal; los haces de la bendición; el Fuego de Din; lluvia de 150 brillos; ~50 hadas y motas; rupias; skybox con aurora y mar de nubes. 264 objetos, 12 luces de color. |
 | **Rotación y zoom** | La cámara orbita 360° alrededor de la isla (una vuelta cada 96 s) y se acerca y aleja con el programa de planos; teclado y ratón suman giro, altura y distancia. |
 | **Materiales** (cada uno con su textura y sus pesos de albedo, especular, reflexión y transparencia) | Ver la tabla de abajo: son más de diez. |
 | **Refracción** | El agua de la piscina y de las cascadas (1.33), los cristales (1.5), las rupias (1.6). Con Fresnel: el agua es espejo mirada de costado y transparente mirada de frente. |
@@ -99,7 +102,8 @@ Los cuatro pesos del albedo son `[difuso, especular, reflexión, transparencia]`
 
 | Material | Textura | Albedo | Especular | Índice de refracción |
 |---|---|---|---|---|
-| Mármol de hada (bordes, columnas, techo) | `fairy_marble.png` + relieve | `[1.0, 0.22, 0.10, 0.0]` | 18 | — |
+| Mármol de hada (bordes) | `fairy_marble.png` + relieve | `[1.0, 0.22, 0.10, 0.0]` | 18 | — |
+| Mármol perlado (columnas, techo) | pintado por código: lavanda con vetas rosas y celestes | `[0.85, 0.12, 0.04, 0.0]` | 30 | — |
 | Mármol pulido (plaza) | `fairy_marble.png` + relieve | `[0.9, 0.6, 0.30, 0.0]` | 80 | — |
 | Agua (celeste, como en Ocarina) | `water_fairy.png`, desplazándose | `[0.25, 0.3, 0.5, 0.6]` | 120 | 1.33 |
 | Oro (molduras) | `gold_triforce.png` + relieve | `[1.0, 0.95, 0.35, 0.0]` | 95 | — |
@@ -173,9 +177,15 @@ arrastra todo lo que cuelga de él. Brazos y piernas se resuelven con
 **cinemática inversa de dos huesos**: las manos quedan siempre sobre la ocarina
 y los pies siempre en el piso, aunque la cadera baje. La pose sale de la canción
 en cada cuadro: se mece a la mitad del compás, marca cada tiempo doblando las
-rodillas, gira el torso a contratiempo de la cadera, asiente, respira, levanta
-la vista hacia el hada mientras está afuera, y el gorro llega tarde a cada
-movimiento, como tela.
+rodillas, gira el torso a contratiempo de la cadera, asiente, respira, y el
+gorro llega tarde a cada movimiento, como tela. Y no hace lo mismo toda la
+canción, sino que tiene **actos**: al principio toca tranquilo, con la cabeza
+gacha sobre la ocarina; desde el segundo 40 toca con sentimiento, pasando el
+peso de un pie al otro cada dos compases y echándose atrás en las notas
+largas; desde el 90, cuando el tema crece, marca más con las rodillas y sigue
+a Navi con la mirada; cuando sale el hada **baja la ocarina** y la mira,
+asombrado; y en la coda vuelve a tocar, suave, hasta que al final baja la
+ocarina y mira el cielo.
 Cuando el hada lo bendice, **guarda la ocarina, levanta los dos brazos y mira
 hacia arriba** para recibir el poder, como en la cinemática.
 
@@ -193,15 +203,16 @@ cuatro tiempos (`src/hada_mayor.rs`):
 1. **Sale del cuenco dando una voltereta** mientras gira, chica, dentro de la
    columna de luz, con un estallido de chispas y un anillo enorme en el agua;
    crece mientras sube y queda flotando derecha sobre el estrado.
-2. **Baila con la música**: cambia de pose en cada compás (una mano detrás de
-   la cabeza, las dos arriba, una tendida hacia Link, los brazos abiertos), y
-   además las manos nunca se quedan quietas (gesticula al ritmo), patalea
-   alternando las piernas, se mece, sube en cada golpe, y en los golpes fuertes
-   echa la cabeza hacia atrás y le tiemblan los hombros —su risa—, con las
-   coletas abiertas como llamas avivadas.
-3. **Bendice a Link**: abre los brazos en cruz y avanza por encima de él; de
-   sus manos baja un **rayo dorado** y una lluvia de chispas sobre Link, que
-   guarda la ocarina y levanta los brazos bajo una luz dorada.
+2. **Baila a su aire** (ver abajo): se ríe con la mano en la boca y los
+   hombros sacudiéndose, como en el juego, le tiende la mano a Link, junta las
+   manos para reunir el poder.
+3. **Bendice a Link**: abre los brazos en cruz y avanza por encima de él. En
+   cada mano se enciende una esfera de luz y de **cada mano baja un haz
+   dorado** —núcleo fino y halo ancho, respirando— hasta la mano levantada de
+   Link del mismo lado; las chispas bajan por los haces girando en espiral.
+   Los haces siguen a las manos durante toda la coreografía (la cruz, el
+   aleteo, las manos ofrecidas). Link guarda la ocarina y levanta los brazos
+   bajo una luz dorada.
 4. **Se zambulle** girando en el cuenco, con una salpicadura de chispas, y en el
    primer tiempo fuerte siguiente Link lanza el **Fuego de Din**
    (`src/fuego_de_din.rs`), como en el juego: sobre el cuenco aparece el
@@ -211,12 +222,25 @@ cuatro tiempos (`src/hada_mayor.rs`):
    de luz pastel —durazno por fuera, rosa por dentro, casi transparente— que
    crece hasta envolver a Link y se deshace en dos ondas de chispas.
 
-Está hecha igual que Link, con cubos orientados colgados de huesos: el pelo
-magenta en dos coletas de cinco eslabones que se aclaran hacia la punta como
-una llama, el moño, el traje de hojas en capas (una textura con hojas en gota
-superpuestas como tejas, cada una con su nervadura), el paño rosa de los
-brazos, las botas de enredadera marrón y la cara maquillada con rubor y
-sonrisa. La piel brilla apenas: es un ser de luz. El
+Está hecha igual que Link, con cubos orientados colgados de huesos, y copiada
+de una captura del juego: **piel verde amarillenta y pálida**, **pelo rojo
+carmesí** en **tres coletas** de cinco eslabones que se aclaran hacia la punta
+como una llama, con un **flequillo en pico** sobre la frente y mechones largos
+a los costados, **orejas en punta**, y **hiedra** —tallos verde oscuro con
+hojitas amarillas, pintados por código— enredada en el pelo, los brazos y el
+corpiño, que como en el juego es casi piel. La cara, igual que la del juego:
+ojos grandes mirando de reojo con el iris violeta, **sombra roja** muy marcada
+hasta unas cejas rojas y gruesas, labios morados sonriendo y la barbilla en
+punta (la cabeza es un cubo: la punta se hace con sombra en las esquinas). La
+piel brilla apenas: es un ser de luz.
+
+Baila **a su aire, no al compás** (el compás lo marca Link): tiene una
+coreografía de diez movimientos contada desde que sale del agua —brazos
+arriba, la risa del juego con la mano en la boca, le tiende la mano a Link,
+junta las manos, la cruz, aletea como alas, le ofrece las manos, pasa el poder
+con una mano al cielo— que se funden uno en otro en un segundo. Entre
+movimiento y movimiento las manos, la cabeza y la deriva en ocho siguen
+periodos lentos que no coinciden entre sí, así que nunca repite el mismo gesto. El
 cuerpo se arma de pie en su propio sistema y se lleva al mundo con una escala y
 una rotación, así que el mismo modelo sirve para la figura chica que sale del
 agua y para la grande que bendice.
@@ -363,7 +387,8 @@ Din cae a los 152.5.
 - Profundidad de campo, estelas anamórficas, aberración cromática, viñeta,
   grano y cierre a formato ancho.
 - **CAS** (realce adaptativo por contraste) para recuperar el filo que pierde
-  el estirado de 400×300 a 800×600.
+  el estirado del cuadro trazado a la pantalla, junto con el reescalado
+  bicúbico.
 
 ### La sincronización
 
@@ -393,8 +418,9 @@ python3 analizar_audio.py assets/music/fairy_fountain.mp3 \
 
 ## Rendimiento
 
-Medido en un MacBook Air M3, trazando a 400×300 y estirando a 800×600, con
-`--bench` (el mínimo de cinco pasadas por momento):
+Medido en un MacBook Air M3, trazando a 400×300 y estirando a 800×600 (la
+resolución de antes; ver abajo por qué ahora es 560×420), con `--bench` (el
+mínimo de cinco pasadas por momento):
 
 | | antes | ahora |
 |---|---|---|
@@ -402,7 +428,7 @@ Medido en un MacBook Air M3, trazando a 400×300 y estirando a 800×600, con
 | Peor plano | 44 ms (segundo 160) | ~44 ms (la bendición, de cerca) |
 | El Fuego de Din (cúpula sobre toda la fuente) | — | 37 ms |
 
-Y eso con la escena **casi ocho veces más grande** (de 34 a 262 objetos, de 8 a 12
+Y eso con la escena **casi ocho veces más grande** (de 34 a 264 objetos, de 8 a 12
 luces). Las notebooks sin ventilador varían un 30% según la temperatura, así
 que las decisiones se tomaron **contando instrucciones ejecutadas**
 (`/usr/bin/time -l`), que no dependen del calor. Con el perfilador de macOS
@@ -428,6 +454,46 @@ que las decisiones se tomaron **contando instrucciones ejecutadas**
    cuártica, y las estelas de la lluvia son **cubos alineados a los ejes**:
    con cilindros orientados la lluvia costaba el 9% del cuadro, con cubos
    casi nada.
+
+### La CPU y la GPU a la vez
+
+Medido el cuadro ENTERO en vivo (`PERFIL=1` imprime el desglose), el trazado
+era 17 ms de 27: los otros 7 ms eran la GPU haciendo el post-procesado y
+mostrando el cuadro, con la CPU esperando sin hacer nada. Ahora, en vivo, el
+trazado del cuadro siguiente corre en otro hilo (que reparte las filas entre
+todos los núcleos) **mientras** el hilo principal le pasa a la GPU el cuadro
+anterior; el costo es un cuadro de retraso en pantalla. El cuadro entero bajó
+de ~27 ms a **~21 ms**, y esa ganancia se gastó en **definición**:
+
+- El trazado subió de 400×300 a **560×420** (casi el doble de píxeles).
+- La ventana **se ajusta a la pantalla** (el 4:3 más grande que entra; en una
+  MacBook Air de 13" queda en 896×672) y todo el post-procesado trabaja a los
+  **píxeles reales** de la pantalla: en una retina son el doble de los puntos.
+  Antes la cadena de la GPU iba a 800×600 y la última pasada se estiraba al
+  doble, así que todo se veía blando aunque el trazado fuera bueno.
+- El cuadro trazado se agranda con un **reescalado bicúbico** (Catmull-Rom,
+  nueve lecturas en la GPU) en vez del bilineal de siempre, y el realce CAS
+  ahora mide a sus vecinos a un texel del cuadro trazado (medía a un píxel de
+  pantalla, que con el cuadro estirado tres veces caía casi en el mismo lugar
+  y no realzaba nada).
+
+Con todo eso el cuadro entero quedaba en ~35 ms (28 por segundo), que se
+sentía lento. La última pieza es el **trazado en tablero de ajedrez**
+(checkerboard rendering, la técnica del PS4 Pro): cada cuadro se traza solo
+la mitad de los píxeles, alternando como un tablero, y la otra mitad la
+completa el acumulador temporal con el cuadro anterior reproyectado, donde
+esos píxeles SÍ se trazaron. Los que no tienen historia (lo que recién
+aparece) se rellenan con el par de vecinos que corre a lo largo del borde, no
+el que lo cruza, para que las columnas no queden en zigzag. La mitad de los
+rayos por casi la misma imagen: el cuadro baja de ~36 ms a **~21 ms (46 por
+segundo)** sin perder definición. `SIN_TABLERO=1` lo apaga y `SIN_PARALELO=1`
+apaga el paralelismo, para comparar.
+
+Un detalle que costó encontrar: la primera versión era el **doble de lenta**.
+En macOS un hilo nace con la prioridad del que lo crea, y el grupo de hilos de
+`rayon` se creaba recién la primera vez que se trazaba, o sea desde el hilo
+del trazado, con menos prioridad: el sistema los mandaba a los núcleos de
+eficiencia. Crearlo al arrancar, desde el hilo principal, lo arregló.
 
 La palanca grande sigue siendo la resolución de trazado (`RENDER_W` /
 `RENDER_H` en `src/main.rs`), no el post-procesado: el bloom, la niebla y el

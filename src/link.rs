@@ -192,6 +192,13 @@ pub struct Pose {
     /// el izquierdo contra el piso.
     prepara: f32,
     azota: f32,
+    /// Cuanto tiene la ocarina en la boca (1) o bajada frente al pecho (0).
+    toca: f32,
+    /// Cuanto corre la cadera de costado, en metros: pasa el peso de un pie
+    /// al otro (las rodillas lo acompanan solas, por la cinematica inversa).
+    desplaza: f32,
+    /// Hacia donde gira la cabeza, en radianes: mira a Navi, o a la fuente.
+    mira_lado: f32,
 }
 
 impl Pose {
@@ -209,6 +216,9 @@ impl Pose {
             gira: 0.0,
             prepara: 0.0,
             azota: 0.0,
+            toca: 1.0,
+            desplaza: 0.0,
+            mira_lado: 0.0,
         }
     }
 }
@@ -243,23 +253,56 @@ pub fn pose_de(p: &SceneParams) -> Pose {
     } else {
         (0.0, 0.0)
     };
+    // LOS ACTOS: Link no hace lo mismo toda la cancion.
+    //   - al principio toca tranquilo, con la cabeza gacha sobre la ocarina;
+    //   - desde el segundo 40 toca con sentimiento: pasa el peso de un pie al
+    //     otro cada dos compases y se echa atras en las notas largas;
+    //   - desde el 90 la cancion crece: marca mas con las rodillas y sigue a
+    //     Navi con la mirada de vez en cuando;
+    //   - cuando sale el hada baja la ocarina y la mira, asombrado, un poco
+    //     echado atras (despues vienen la bendicion y el Fuego de Din);
+    //   - en la coda vuelve a tocar, suave, y al final baja la ocarina y mira
+    //     el cielo.
+    let t = p.tiempo;
+    let suave = |x: f32| {
+        let x = x.clamp(0.0, 1.0);
+        x * x * (3.0 - 2.0 * x)
+    };
+    let tramo = |a: f32, b: f32| suave((t - a) / 3.0) * (1.0 - suave((t - b) / 3.0));
+    let calma = 1.0 - suave((t - 36.0) / 4.0);
+    let sentimiento = tramo(38.0, 92.0);
+    let crece = tramo(88.0, 124.0);
+    let final_ = suave((t - 173.0) / 3.0);
+    let swell = p.swell.clamp(0.0, 1.0);
+    let bendicion = p.bendicion.clamp(0.0, 1.0);
     // Mientras el hada esta afuera (y antes de la bendicion) la mira.
-    let mira = p.hada.clamp(0.0, 1.0) * (1.0 - p.bendicion.clamp(0.0, 1.0)) * 0.22;
+    let asombro = p.hada.clamp(0.0, 1.0) * (1.0 - bendicion);
+    let mira = asombro * 0.30;
+    // Cada tanto mira a Navi, que le da vueltas: una mirada que va y vuelve.
+    let ojeada = (t * 0.45).sin().max(0.0).powi(3) * if (t * 0.13).sin() > 0.0 { 1.0 } else { -1.0 };
+    let compas2 = p.beat_period.max(0.2) * 8.0;
     Pose {
-        balanceo: fase.sin() * vaiven * (1.0 - azota),
-        inclinacion: 0.06 + 0.05 * energia + 0.06 * p.swell + 0.45 * azota,
-        asiente: p.pulso * 0.09 - 0.02 - mira - 0.3 * prepara * (1.0 - azota) + 0.25 * azota,
-        respira: (p.tiempo * 1.4).sin() * 0.008,
-        gorro_arriba: 0.10 * p.pulso + 0.05 * p.swell + 0.35 * azota,
+        balanceo: fase.sin() * vaiven * (1.0 - azota) * (1.0 - 0.5 * asombro),
+        inclinacion: 0.06 + 0.05 * energia + 0.06 * swell * (1.0 - sentimiento) - 0.08 * swell * sentimiento
+            - 0.10 * asombro
+            + 0.45 * azota,
+        asiente: p.pulso * 0.09 - 0.02 + 0.08 * calma - mira - 0.3 * prepara * (1.0 - azota) + 0.25 * azota
+            - 0.45 * final_,
+        respira: (t * 1.4).sin() * 0.008 * (1.0 + 2.0 * asombro),
+        gorro_arriba: 0.10 * p.pulso + 0.05 * swell + 0.35 * azota,
         gorro_lado: -(fase - PI / 2.0).sin() * vaiven * 2.2,
-        tiempo: p.tiempo,
-        recibe: p.bendicion.clamp(0.0, 1.0),
-        // Marca el tiempo con las rodillas, y se agacha para el hechizo.
-        baja: 0.03 * p.pulso + 0.015 * p.swell + 0.06 * prepara + 0.15 * azota,
+        tiempo: t,
+        recibe: bendicion,
+        // Marca el tiempo con las rodillas (mas cuando la cancion crece), y
+        // se agacha para el hechizo.
+        baja: (0.02 + 0.03 * crece) * p.pulso + 0.015 * swell + 0.06 * prepara + 0.15 * azota,
         // Y el torso acompana el vaiven, a contratiempo de la cadera.
         gira: (fase * 0.5).sin() * (0.05 + 0.08 * energia) * (1.0 - prepara),
         prepara,
         azota,
+        toca: 1.0 - asombro.max(final_),
+        desplaza: 0.05 * (t / compas2 * 2.0 * PI).sin() * (sentimiento + 0.5 * crece) * (1.0 - asombro),
+        mira_lado: 0.45 * ojeada * crece + 0.15 * (t * 0.23).sin() * sentimiento,
     }
 }
 
@@ -278,16 +321,28 @@ impl Esqueleto {
             e: ejes_de(guinada_base(), 0.0, pose.balanceo),
         };
         // La cadera: baja cuando se doblan las rodillas y gira un poco.
-        let cuerpo = raiz.hijo(Vec3::new(0.0, -pose.baja, 0.0), ejes_de(-pose.gira * 0.4, 0.0, 0.0));
+        let cuerpo = raiz.hijo(Vec3::new(pose.desplaza, -pose.baja, 0.0), ejes_de(-pose.gira * 0.4, 0.0, 0.0));
         let torso = cuerpo.hijo(
             Vec3::new(0.0, 0.78 + pose.respira, 0.0),
             ejes_de(pose.gira, pose.inclinacion, pose.balanceo * 0.6),
         );
         let cabeza = torso.hijo(
             Vec3::new(0.0, 0.54, 0.0),
-            ejes_de(0.0, 0.10 + pose.asiente - 0.55 * pose.recibe, -pose.balanceo * 1.2),
+            ejes_de(pose.mira_lado, 0.10 + pose.asiente - 0.55 * pose.recibe, -pose.balanceo * 1.2),
         );
         Esqueleto { raiz, cuerpo, torso, cabeza }
+    }
+
+    /// Donde esta la ocarina: en la boca mientras toca, frente al pecho
+    /// cuando la baja, y en el medio mientras la sube o la baja.
+    fn ocarina(&self, pose: &Pose) -> Hueso {
+        let boca = self.cabeza.hijo(OCARINA_EN_CABEZA, ejes_de(0.0, 0.25, 0.0));
+        let pecho = self.torso.hijo(Vec3::new(0.0, 0.30, 0.20), ejes_de(0.0, 0.0, 0.0));
+        let k = pose.toca.clamp(0.0, 1.0);
+        let l = |a: Vec3, b: Vec3| a + (b - a) * k;
+        let x = normalize(&l(pecho.e[0], boca.e[0]));
+        let z = normalize(&cross(&x, &l(pecho.e[1], boca.e[1])));
+        Hueso { o: l(pecho.o, boca.o), e: [x, cross(&z, &x), z] }
     }
 }
 
@@ -298,7 +353,9 @@ fn piezas(pose: &Pose) -> (Vec<Pieza>, Vec<usize>) {
     // Donde termina cada PARTE del cuerpo: cada una va en su propio grupo
     // acotado, asi que un rayo que pasa por la cabeza no prueba las botas.
     let mut cortes: Vec<usize> = Vec::new();
-    let Esqueleto { raiz, cuerpo, torso, cabeza } = Esqueleto::de(pose);
+    let esqueleto = Esqueleto::de(pose);
+    let ocarina = esqueleto.ocarina(pose);
+    let Esqueleto { raiz, cuerpo, torso, cabeza } = esqueleto;
 
     // ---- PIERNAS Y BOTAS ----
     // Las botas marrones con el borde doblado arriba, y las calzas
@@ -430,7 +487,6 @@ fn piezas(pose: &Pose) -> (Vec<Pieza>, Vec<usize>) {
     // ---- LA OCARINA DEL TIEMPO ----
     // Azul, en la boca, cruzada. Cuelga de la cabeza: si Link asiente, la
     // ocarina asiente con el.
-    let ocarina = cabeza.hijo(OCARINA_EN_CABEZA, ejes_de(0.0, 0.25, 0.0));
     // Para recibir la bendicion la guarda: se achica hasta desaparecer.
     let guardada = 1.0 - (pose.recibe.max(pose.prepara) * 2.0).clamp(0.0, 1.0);
     v.push(ocarina.recta(Vec3::zeros(), Vec3::new(0.16, 0.065, 0.075) * guardada, M::Ocarina));
@@ -847,7 +903,8 @@ impl LinkVivo {
 
     /// Donde esta la ocarina ahora: de ahi salen las notas.
     pub fn ocarina(&self, p: &SceneParams) -> Vec3 {
-        Esqueleto::de(&pose_de(p)).cabeza.punto(OCARINA_EN_CABEZA)
+        let pose = pose_de(p);
+        Esqueleto::de(&pose).ocarina(&pose).o
     }
 }
 

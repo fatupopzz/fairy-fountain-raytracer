@@ -1076,7 +1076,14 @@ pub fn actualizar_escena(
             for (hijo, &(escala, (r, g, b))) in grupo.children_mut().iter_mut().zip(CAPAS.iter()) {
                 if let Some(pilar) = (hijo.as_mut() as &mut dyn Any).downcast_mut::<crate::cylinder::Cylinder>() {
                     pilar.radius = if s > 0.01 { PILAR_RADIO * escala * s * late } else { 0.0 };
-                    let k = s * (0.75 + 0.35 * params.pulso).min(1.0) * if escala > 1.0 { 0.30 } else { 1.0 };
+                    // Con el hada afuera, la columna se apaga casi del todo: el
+                    // hada flota adentro de ella, y el nucleo blanco le tapaba
+                    // la cara.
+                    let cede = {
+                        let h = (params.hada * 2.5).clamp(0.0, 1.0);
+                        1.0 - 0.9 * h * h * (3.0 - 2.0 * h)
+                    };
+                    let k = s * cede * (0.75 + 0.35 * params.pulso).min(1.0) * if escala > 1.0 { 0.30 } else { 1.0 };
                     pilar.material.emission_color =
                         Some(Color::new((r * k) as u8, (g * k) as u8, (b * k) as u8, 255));
                 }

@@ -189,6 +189,20 @@ pub fn armar(
     arriba.extend(cajas_de_capa(0, TECHO_ISLA - 0.22, 0.9, &tierra, 0.6));
     objetos.push(Box::new(GrupoAcotado::estatico(arriba)));
 
+    // ---- LA VIDA SOBRE EL PASTO ----
+    // El anillo de pasto alrededor de la plaza era una lamina verde lisa, y
+    // desde lejos la isla se leia como un bloque. Ahora tiene flores de
+    // colores, arbustos redondos de Hyrule y algun cristalito encendido,
+    // repartidos por celda con el azar fijo de `hash` (sin tapar los
+    // arroyos de las cascadas ni meterse bajo la plaza).
+    objetos.push(Box::new(GrupoAcotado::estatico(flora(&pasto))));
+
+    // ---- EL PASTO QUE CUELGA ----
+    // El borde de arriba era una linea recta entre el verde y la tierra.
+    // Sobre cada cara del contorno cuelgan tres mechones de pasto de largo
+    // distinto, y el borde se lee organico, como el de un diorama.
+    objetos.push(Box::new(GrupoAcotado::estatico(mechones(&pasto))));
+
     // ---- LA ROCA ----
     // Una capa por grupo: los rayos que miran la isla de costado cruzan dos
     // o tres, y cada una tiene una docena de cajas.
@@ -352,6 +366,122 @@ pub fn armar(
 
 /// Una punta de cristal que CUELGA: base cuadrada arriba en `techo`,
 /// vertice abajo.
+/// Si (x, z) cae sobre el arroyo de alguna cascada, que corre desde el borde
+/// de la plaza hasta el borde de la isla.
+fn sobre_arroyo(x: f32, z: f32) -> bool {
+    CASCADAS.iter().any(|&(cx, cz, dx, dz, ancho)| {
+        let (ax, az) = (cx - dx * 1.8, cz - dz * 1.8);
+        let (vx, vz) = (cx - ax, cz - az);
+        let t = (((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz)).clamp(0.0, 1.0);
+        let (px, pz) = (ax + vx * t, az + vz * t);
+        ((x - px).powi(2) + (z - pz).powi(2)).sqrt() < ancho * 0.9
+    })
+}
+
+/// Las flores, los arbustos y los cristalitos del anillo de pasto. Ver
+/// `armar`.
+fn flora(pasto: &Material) -> Vec<Box<dyn RayIntersect + Send + Sync>> {
+    const PETALOS: [(u8, u8, u8); 4] = [(255, 150, 205), (255, 250, 235), (255, 225, 90), (200, 160, 255)];
+    let tallo = Material::new([1.0, 0.05, 0.0, 0.0], 8.0, 0.0, Texture::Solid(Color::new(70, 140, 50, 255)), None);
+    let mut cosas: Vec<Box<dyn RayIntersect + Send + Sync>> = Vec::new();
+    for j in 0..CELDAS {
+        for i in 0..CELDAS {
+            if !en_capa(i, j, 0) {
+                continue;
+            }
+            let (cx, cz) = centro_celda(i, j);
+            let h = |k: u32| hash(i, j, k);
+            // Un punto al azar dentro de la celda.
+            let punto = |k: u32| (cx + (h(k) - 0.5) * CELDA * 0.8, cz + (h(k + 1) - 0.5) * CELDA * 0.8);
+            let libre = |x: f32, z: f32| x.abs().max(z.abs()) > 6.15 && !sobre_arroyo(x, z);
+            let tirada = h(61);
+            if tirada < 0.30 {
+                // Un ramito de dos o tres flores.
+                for f in 0..(2 + (h(62) * 2.0) as u32) {
+                    let (x, z) = punto(70 + f * 3);
+                    if !libre(x, z) {
+                        continue;
+                    }
+                    let alto = 0.10 + h(71 + f * 3) * 0.12;
+                    let (r, g, b) = PETALOS[(h(72 + f * 3) * 4.0) as usize % 4];
+                    let petalo = Material::new([1.0, 0.15, 0.0, 0.0], 20.0, 0.0, Texture::Solid(Color::new(r, g, b, 255)), None);
+                    cosas.push(Box::new(Cube::new_rect(Vec3::new(x, TECHO_ISLA + alto * 0.5, z), 0.018, alto, 0.018, tallo.clone())));
+                    cosas.push(Box::new(Cube::new_rect(Vec3::new(x, TECHO_ISLA + alto + 0.02, z), 0.075, 0.04, 0.075, petalo)));
+                }
+            } else if tirada < 0.40 {
+                // Un arbusto: tres esferas de pasto que se solapan.
+                let (x, z) = punto(80);
+                if !libre(x, z) {
+                    continue;
+                }
+                let r = 0.18 + h(82) * 0.12;
+                for (dx, dz, k) in [(0.0f32, 0.0f32, 1.0f32), (r * 0.8, r * 0.3, 0.75), (-r * 0.5, r * 0.7, 0.7)] {
+                    cosas.push(Box::new(Sphere {
+                        center: Vec3::new(x + dx, TECHO_ISLA + r * k * 0.75, z + dz),
+                        radius: r * k,
+                        material: pasto.clone(),
+                    }));
+                }
+            } else if tirada < 0.44 {
+                // Un par de cristalitos encendidos, como los de la plaza.
+                let (x, z) = punto(90);
+                if !libre(x, z) {
+                    continue;
+                }
+                let (r, g, b) = [(255u8, 120u8, 210u8), (120, 220, 255), (190, 140, 255)][(h(92) * 3.0) as usize % 3];
+                let cristal = Material::new(
+                    [0.4, 0.8, 0.0, 0.0],
+                    60.0,
+                    0.0,
+                    Texture::Solid(Color::new(r, g, b, 255)),
+                    Some(Color::new(r / 3, g / 3, b / 3, 255)),
+                );
+                cosas.extend(punta_arriba(Vec3::new(x, TECHO_ISLA, z), 0.14, 0.35 + h(93) * 0.3, &cristal));
+                cosas.extend(punta_arriba(Vec3::new(x + 0.12, TECHO_ISLA, z + 0.05), 0.09, 0.2 + h(94) * 0.2, &cristal));
+            }
+        }
+    }
+    cosas
+}
+
+/// Los mechones de pasto que cuelgan por el borde de la capa de arriba. Ver
+/// `armar`.
+fn mechones(pasto: &Material) -> Vec<Box<dyn RayIntersect + Send + Sync>> {
+    let mut cosas: Vec<Box<dyn RayIntersect + Send + Sync>> = Vec::new();
+    for j in 0..CELDAS {
+        for i in 0..CELDAS {
+            if !en_capa(i, j, 0) {
+                continue;
+            }
+            let (cx, cz) = centro_celda(i, j);
+            // Las cuatro caras: solo las que dan al vacio.
+            for (d, (di, dj)) in [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)].into_iter().enumerate() {
+                let (ni, nj) = (i + di, j + dj);
+                let afuera = ni < 0 || nj < 0 || ni >= CELDAS || nj >= CELDAS || !en_capa(ni, nj, 0);
+                if !afuera {
+                    continue;
+                }
+                let (nx, nz) = (di as f32, dj as f32);
+                // Tres mechones a lo largo de la cara, de largo al azar.
+                for m in 0..3 {
+                    let h = |k: u32| hash(i * 7 + d as i32, j * 5 + m, k);
+                    let a_lo_largo = (m as f32 - 1.0) * CELDA / 3.0 + (h(1) - 0.5) * 0.08;
+                    let largo = 0.08 + h(2) * 0.30;
+                    let ancho = CELDA / 3.0 * (0.65 + h(3) * 0.35);
+                    let centro = Vec3::new(
+                        cx + nx * (CELDA * 0.5 + 0.02) + nz.abs() * a_lo_largo,
+                        TECHO_ISLA - 0.20 - largo * 0.5,
+                        cz + nz * (CELDA * 0.5 + 0.02) + nx.abs() * a_lo_largo,
+                    );
+                    let (sx, sz) = if nx != 0.0 { (0.04, ancho) } else { (ancho, 0.04) };
+                    cosas.push(Box::new(Cube::new_rect(centro, sx, largo, sz, pasto.clone()).con_mosaico(0.6)));
+                }
+            }
+        }
+    }
+    cosas
+}
+
 fn punta(techo: Vec3, lado: f32, largo: f32, material: &Material) -> Vec<Box<dyn RayIntersect + Send + Sync>> {
     piramide(techo, lado, -largo, material)
 }

@@ -1660,6 +1660,7 @@ impl SyncData {
             unos: self.unos_hasta(t, 2.0),
             hada: self.hada_mayor(t),
             hada_salio: Self::desde_el_ultimo(&self.hada_salidas, t, 4.0),
+            hada_edad: Self::desde_el_ultimo(&self.hada_salidas, t, 60.0),
             hada_entro: Self::desde_el_ultimo(&self.hada_zambullidas, t, 4.0),
             bendicion: self.bendicion(t, self.hada_mayor(t)),
             hechizo: Self::desde_el_ultimo(&self.hechizos, t, 4.0),
@@ -1839,6 +1840,9 @@ pub struct SceneParams {
     pub hada: f32,
     /// Hace cuantos segundos empezo a salir del agua, o -1 (ventana de 4 s).
     pub hada_salio: f32,
+    /// Hace cuantos segundos empezo a salir, o -1 (ventana de 60 s): el reloj
+    /// de su coreografia, ver `hada_mayor::pose_de`.
+    pub hada_edad: f32,
     /// Hace cuantos segundos se zambullo, o -1 (ventana de 4 s).
     pub hada_entro: f32,
     /// Cuanto esta bendiciendo a Link, de 0 a 1. Ver `SyncData::bendicion`.

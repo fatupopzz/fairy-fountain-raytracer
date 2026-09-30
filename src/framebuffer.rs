@@ -32,6 +32,14 @@ pub struct Framebuffer {
     /// cada cuadro.
     historia_nueva: Vec<[f32; 3]>,
     background: Color,
+    /// EL TABLERO DE AJEDREZ: con `Some(paridad)` el trazador traza solo la
+    /// mitad de los pixeles de este cuadro, los de `(x + y + paridad)` par,
+    /// y la paridad se alterna cuadro a cuadro. Los que faltan los rellena
+    /// `rellenar_tablero` con sus vecinos, y `acumular` les pone encima la
+    /// historia reproyectada, que es donde SI se trazaron en el cuadro
+    /// anterior. La mitad de los rayos, casi la misma imagen. `None`: se
+    /// traza todo (foto, video, o con el acumulador apagado).
+    pub tablero: Option<u32>,
 }
 
 impl Framebuffer {
@@ -46,6 +54,50 @@ impl Framebuffer {
             historia_nueva: vec![[0.0; 3]; width * height],
             hay_historia: false,
             background,
+            tablero: None,
+        }
+    }
+
+    /// Si el pixel se traza en este cuadro. Ver `tablero`.
+    #[inline]
+    pub fn se_traza(tablero: Option<u32>, x: usize, y: usize) -> bool {
+        tablero.map_or(true, |paridad| (x + y + paridad as usize) % 2 == 0)
+    }
+
+    /// Rellena los pixeles que el tablero salteo con sus vecinos, que en un
+    /// tablero son siempre de los trazados. Respetando los BORDES: de los dos
+    /// pares de vecinos (izquierda-derecha y arriba-abajo) se usa el que mas
+    /// se parece entre si, o sea el que corre A LO LARGO del borde y no el
+    /// que lo cruza. Promediando los cuatro, el borde de una columna quedaba
+    /// en zigzag. La profundidad es la del vecino mas cercano del par
+    /// (promediarla dejaria una profundidad falsa en los bordes). Es lo que
+    /// se ve donde no hay historia (lo que recien aparece), y la caja contra
+    /// la que `acumular` recorta la historia.
+    pub fn rellenar_tablero(&mut self) {
+        let Some(paridad) = self.tablero else { return };
+        let (w, h) = (self.width, self.height);
+        let luz = |c: Color| c.r as i32 * 2 + c.g as i32 * 5 + c.b as i32;
+        for y in 0..h {
+            for x in 0..w {
+                if Self::se_traza(Some(paridad), x, y) {
+                    continue;
+                }
+                let i = y * w + x;
+                // En el borde de la imagen falta un vecino: se repite el otro.
+                let izq = if x > 0 { i - 1 } else { i + 1 };
+                let der = if x + 1 < w { i + 1 } else { i - 1 };
+                let arr = if y > 0 { i - w } else { i + w };
+                let aba = if y + 1 < h { i + w } else { i - w };
+                let (b, d) = (&self.buffer, &self.depth);
+                let dif_h = (luz(b[izq]) - luz(b[der])).abs();
+                let dif_v = (luz(b[arr]) - luz(b[aba])).abs();
+                let (p, q) = if dif_h <= dif_v { (izq, der) } else { (arr, aba) };
+                let (cp, cq) = (b[p], b[q]);
+                let medio = |u: u8, v: u8| ((u as u16 + v as u16) / 2) as u8;
+                let profundidad = d[p].min(d[q]);
+                self.buffer[i] = Color::new(medio(cp.r, cq.r), medio(cp.g, cq.g), medio(cp.b, cq.b), 255);
+                self.depth[i] = profundidad;
+            }
         }
     }
 
@@ -129,6 +181,7 @@ impl Framebuffer {
         };
 
         let (w, h) = (self.width, self.height);
+        let tablero = self.tablero;
 
         // Los campos por separado: el bucle escribe en `historia_nueva`
         // mientras lee `historia`, `buffer` y `depth`, y pidiendo `self`
@@ -224,6 +277,13 @@ impl Framebuffer {
                             viejo[c] = (arriba + (abajo - arriba) * ty).clamp(minimo[c], maximo[c]);
                         }
 
+                        // Un pixel que el tablero salteo no trae una muestra
+                        // nueva, trae el relleno de sus vecinos: pesa menos
+                        // que una muestra, pero algo, porque en un borde que
+                        // se mueve la historia recortada puede quedar de
+                        // cualquiera de los dos lados y, sola, armaba un
+                        // zigzag. Ver `tablero`.
+                        let peso = if Self::se_traza(tablero, x, y) { peso } else { 0.4 };
                         for c in 0..3 {
                             salida[x][c] = viejo[c] + (nuevo[c] - viejo[c]) * peso;
                         }

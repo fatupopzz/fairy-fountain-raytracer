@@ -93,6 +93,31 @@ fn textura_baldosa_blanca() -> TextureImage {
     })
 }
 
+/// EL MARMOL PERLADO del templete (columnas y techo): blanco con un toque
+/// lavanda, con vetas suaves rosas y celestes que siguen el ruido. Antes era
+/// el marmol teal de la piscina, y de noche las columnas y el techo se leian
+/// como bloques casi negros tapando la fuente: una jaula en vez de un
+/// templete.
+pub fn textura_marmol_perla() -> TextureImage {
+    let ruido = campo_fbm(256, 6, 4, 433);
+    let vetas = campo_fbm(256, 3, 5, 437);
+    TextureImage::pintada(256, 256, move |u, v| {
+        let i = ((v * 255.0) as usize) * 256 + (u * 255.0) as usize;
+        let n = ruido[i];
+        // Las vetas: donde el segundo ruido cruza por la mitad, una linea
+        // fina que se tuerce.
+        let veta = 1.0 - (((vetas[i] - 0.5) * 22.0 + n * 3.0).sin().abs()).powf(0.25);
+        let base = [0.74 + 0.06 * n, 0.72 + 0.05 * n, 0.82 + 0.04 * n];
+        let tinte = if vetas[i] > 0.5 { [0.88, 0.58, 0.78] } else { [0.55, 0.74, 0.86] };
+        let k = (veta * 0.55).clamp(0.0, 1.0);
+        [
+            base[0] + (tinte[0] - base[0]) * k,
+            base[1] + (tinte[1] - base[1]) * k,
+            base[2] + (tinte[2] - base[2]) * k,
+        ]
+    })
+}
+
 /// Un petalo de loto: rosa palido en la base, rosa intenso en la punta, con
 /// nervaduras finas a lo largo. Las UV de la cometa ponen la base en v = 1 y
 /// la punta en v = 0.
@@ -494,13 +519,15 @@ impl FuenteViva {
             for hijo in g.children_mut() {
                 if let Some(e) = (hijo.as_mut() as &mut dyn Any).downcast_mut::<Sphere>() {
                     e.center = aca;
-                    e.radius = if k_luz > 0.03 { 0.06 + 0.04 * titila } else { 0.0 };
+                    // Chica y titilante: un destello, no una bola. Grande y con la
+                    // estela abajo se leia como un alfiler.
+                    e.radius = if k_luz > 0.03 { 0.028 + 0.028 * titila } else { 0.0 };
                     e.material.emission_color = Some(Color::new(c(cr, k_luz), c(cg, k_luz), c(cb, k_luz), 255));
                 } else if let Some(estela) = (hijo.as_mut() as &mut dyn Any).downcast_mut::<Cube>() {
-                    let (ancho, largo) = if k_luz > 0.03 { (0.022, 0.25 + 0.2 * velocidad) } else { (0.0, 0.0) };
+                    let (ancho, largo) = if k_luz > 0.03 { (0.009, 0.30 + 0.25 * velocidad) } else { (0.0, 0.0) };
                     estela.min = aca - Vec3::new(ancho, 0.0, ancho);
                     estela.max = aca + Vec3::new(ancho, largo, ancho);
-                    let k = k_luz * 0.55;
+                    let k = k_luz * 0.40;
                     estela.material.emission_color = Some(Color::new(c(cr, k), c(cg, k), c(cb, k), 255));
                 }
             }

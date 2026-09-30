@@ -149,9 +149,11 @@ const float EXPOSICION = 1.34;
 // se sigue leyendo.
 const vec3 LIFT = vec3(0.020, 0.015, 0.034);
 
-// Cuanto realza el CAS, de 0 (apenas) a 1 (fuerte). A 0.65 le devuelve el
-// filo al estirado sin que se note que hay un filtro puesto.
-const float NITIDEZ = 0.80;
+// Cuanto realza el CAS, de 0 (apenas) a 1 (fuerte). BAJO de 0.80 a 0.55
+// cuando se arreglo la distancia a los vecinos (ver `main`): hasta ahi el
+// realce casi no actuaba y 0.80 era un numero que no hacia nada; actuando
+// de verdad, 0.80 ya levantaba el ruido de las sombras suaves.
+const float NITIDEZ = 0.55;
 
 // El tinte del halo (ver "halacion" abajo).
 const vec3 HALACION = vec3(1.0, 0.86, 0.96);
@@ -173,6 +175,39 @@ const float DIFUSION = 0.07;
 // luminancia.
 const vec3 TONO_SOMBRAS = vec3(0.86, 0.80, 1.10);
 const vec3 TONO_LUCES = vec3(1.06, 0.98, 0.96);
+
+// EL REESCALADO BICUBICO (Catmull-Rom). El cuadro trazado es mas chico que
+// la pantalla (en una retina, mas de tres veces) y el filtro bilineal, que es
+// lo que hace la GPU sola, lo ablanda: cada pixel es el promedio de los
+// cuatro texeles mas cercanos. Catmull-Rom mira dieciseis y conserva el filo
+// de los bordes. Con el truco de juntar los pesos del medio, los dieciseis se
+// leen en nueve lecturas bilineales (Sigg y Hadwiger, GPU Gems 2 cap. 20).
+vec3 bicubica(sampler2D tex, vec2 uv) {
+    vec2 tam = vec2(textureSize(tex, 0));
+    vec2 p = uv * tam - 0.5;
+    vec2 i = floor(p);
+    vec2 f = p - i;
+    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    vec2 w3 = f * f * (-0.5 + 0.5 * f);
+    vec2 w12 = w1 + w2;
+    vec2 t0 = (i - 0.5) / tam;
+    vec2 t3 = (i + 2.5) / tam;
+    vec2 t12 = (i + 0.5 + w2 / w12) / tam;
+    vec3 r = texture(tex, vec2(t0.x, t0.y)).rgb * w0.x * w0.y
+           + texture(tex, vec2(t12.x, t0.y)).rgb * w12.x * w0.y
+           + texture(tex, vec2(t3.x, t0.y)).rgb * w3.x * w0.y
+           + texture(tex, vec2(t0.x, t12.y)).rgb * w0.x * w12.y
+           + texture(tex, vec2(t12.x, t12.y)).rgb * w12.x * w12.y
+           + texture(tex, vec2(t3.x, t12.y)).rgb * w3.x * w12.y
+           + texture(tex, vec2(t0.x, t3.y)).rgb * w0.x * w3.y
+           + texture(tex, vec2(t12.x, t3.y)).rgb * w12.x * w3.y
+           + texture(tex, vec2(t3.x, t3.y)).rgb * w3.x * w3.y;
+    // Catmull-Rom puede pasarse un poco en los bordes duros; no por debajo
+    // de cero.
+    return max(r, 0.0);
+}
 
 void main() {
     // --- REALCE ADAPTATIVO POR CONTRASTE (CAS) ---
@@ -197,8 +232,11 @@ void main() {
     // trazado, que es lo que perdio nitidez al estirarse) y antes de la
     // profundidad de campo, que vive en la ultima pasada: asi el fondo se
     // sigue pudiendo desenfocar despues sin que esto se lo devuelva.
-    vec2 texel = 1.0 / resolution;
-    vec3 e = texture(texture0, fragTexCoord).rgb;
+    // Los vecinos estan a un texel DEL CUADRO TRAZADO, no de la pantalla:
+    // a un pixel de pantalla, con el cuadro estirado tres veces, los cinco
+    // puntos caian casi en el mismo texel y el realce no hacia casi nada.
+    vec2 texel = 1.0 / vec2(textureSize(texture0, 0));
+    vec3 e = bicubica(texture0, fragTexCoord);
     vec3 n = texture(texture0, fragTexCoord + vec2(0.0, -texel.y)).rgb;
     vec3 s = texture(texture0, fragTexCoord + vec2(0.0, texel.y)).rgb;
     vec3 o = texture(texture0, fragTexCoord + vec2(-texel.x, 0.0)).rgb;

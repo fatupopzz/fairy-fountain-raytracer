@@ -166,8 +166,11 @@ use texture::{Texture, TextureImage};
 use toro::Toro;
 use triangle::Triangle;
 
-const WIDTH: usize = 800;
-const HEIGHT: usize = 600;
+/// La ventana, en puntos. En una pantalla retina son el doble de pixeles
+/// reales, y el post-procesado trabaja a esos pixeles reales (ver `PostGpu`).
+/// Subio de 800 x 600: 1120 x 840 todavia entra en una notebook de 13".
+const WIDTH: usize = 1120;
+const HEIGHT: usize = 840;
 
 /// Negro. Lo que se ve donde el rayo no le pega a nada lo pone el skybox,
 /// asi que esto solo importa mientras el framebuffer esta vacio.
@@ -412,8 +415,18 @@ const MAX_DEPTH: u32 = 3;
 /// cueva va a la mitad: son quinientos cubos con refraccion y a 600 x 450
 /// quedaba en tres cuadros por segundo. El post-procesado (bloom, niebla,
 /// tinte) corre en la GPU a su propia resolucion y no se entera.
-const RENDER_W: u32 = 400;
-const RENDER_H: u32 = 300;
+///
+/// Subio de 400 x 300 a 560 x 420 (casi el doble de pixeles) cuando el
+/// trazado paso a correr a la vez que la GPU (ver `en_paralelo`) y la ventana
+/// crecio a 1120 x 840: lo que se gano en tiempo se gasto en definicion. El
+/// cuadro entero quedo en ~37 ms (27 por segundo).
+const RENDER_W: u32 = 560;
+const RENDER_H: u32 = 420;
+/// El tamano del VIDEO: 1440 x 1080, el 1080p de 4:3. Se traza a ese tamano
+/// de verdad (no se estira) y toda la cadena de la GPU trabaja a ese tamano.
+/// (A 1920 x 1440 cada cuadro tardaba 2.3 s: tres horas y media de video.)
+const VIDEO_W: u32 = 1440;
+const VIDEO_H: u32 = 1080;
 
 // ---------- Utilidades de color ----------
 // raylib usa u8 por canal, pero el sombreado se hace en f32.
@@ -1294,6 +1307,7 @@ fn render_rows(
     if row_start >= row_end {
         return;
     }
+    let tablero = framebuffer.tablero;
 
     // Cada fila es independiente y se escribe donde va, sin juntarla
     // antes en ningun lado (ver `Framebuffer::filas_mut`).
@@ -1313,6 +1327,11 @@ fn render_rows(
         // sombra. Ver `Sombras`.
         let mut sombras = Sombras::vacio();
         for x in 0..pixel_width {
+            // El tablero: este cuadro se saltea la mitad. Ver
+            // `Framebuffer::tablero`.
+            if !Framebuffer::se_traza(tablero, x, y) {
+                continue;
+            }
 
             // Donde cae cada muestra DENTRO del pixel.
             //
@@ -1409,16 +1428,6 @@ fn render_rows(
 /// donde se corre el programa, que con `cargo run` es la raiz del proyecto.
 const SHADERS: &str = "resources/shaders/glsl330";
 
-/// Resolucion a la que se calcula el bloom: la mitad de la ventana.
-///
-/// No es un recorte de calidad, es lo que hace que el efecto sea barato Y
-/// ancho a la vez. El halo es por definicion algo sin detalle, asi que
-/// nadie ve la diferencia entre calcularlo a 800 o a 400; en cambio, a
-/// mitad de resolucion cada muestra del desenfoque cubre dos pixeles de
-/// pantalla, o sea que el mismo numero de muestras alcanza el doble de
-/// radio. Y de paso son cuatro veces menos pixeles que sombrear.
-const BLOOM_W: u32 = (WIDTH / 2) as u32;
-const BLOOM_H: u32 = (HEIGHT / 2) as u32;
 
 // El UMBRAL del bloom ya no vive aca: lo decide la cancion cuadro a cuadro
 // porque depende de la hora del dia (ver `SceneParams::bloom_threshold` en
@@ -1502,6 +1511,13 @@ const KAL_PROF_LEJOS: f32 = 0.50;
 /// `GetShaderLocation` hace una consulta al driver por nombre, y son diez
 /// nombres por cuadro que devuelven siempre lo mismo.
 struct PostGpu {
+    /// El tamano de salida de toda la cadena: la ventana en vivo, el del
+    /// video (mas grande) con `--video`.
+    ancho: u32,
+    alto: u32,
+    /// El tamano del rectangulo donde la ultima pasada dibuja, en las
+    /// coordenadas del que dibuja. Ver `efectos`.
+    destino: (f32, f32),
     threshold: Shader,
     baja: Shader,
     sube: Shader,
@@ -1629,7 +1645,13 @@ const GODRAYS_PULSO: f32 = 0.45;
 const GODRAYS_SAMPLES: i32 = 60;
 
 impl PostGpu {
-    fn nuevo(rl: &mut RaylibHandle, thread: &RaylibThread) -> PostGpu {
+    fn nuevo(rl: &mut RaylibHandle, thread: &RaylibThread, ancho: u32, alto: u32, destino: (f32, f32)) -> PostGpu {
+        // El bloom se calcula a la MITAD del tamano de salida. No es un
+        // recorte de calidad, es lo que hace que el efecto sea barato Y ancho
+        // a la vez: el halo es por definicion algo sin detalle, y a mitad de
+        // resolucion cada muestra del desenfoque cubre dos pixeles, o sea que
+        // el mismo numero de muestras alcanza el doble de radio.
+        let (bloom_w, bloom_h) = (ancho / 2, alto / 2);
         // Vertex shader `None`: raylib pone el suyo, que es exactamente lo
         // que hace falta (pasar posicion y coordenada de textura de un
         // rectangulo). Todo el trabajo esta en el de fragmentos.
@@ -1715,21 +1737,21 @@ impl PostGpu {
         // nivel quede en cero pixeles, que raylib no acepta.
         let mips: Vec<RenderTexture2D> = (0..BLOOM_NIVELES)
             .map(|i| {
-                let w = (BLOOM_W >> i).max(1);
-                let h = (BLOOM_H >> i).max(1);
+                let w = (bloom_w >> i).max(1);
+                let h = (bloom_h >> i).max(1);
                 rl.load_render_texture(thread, w, h)
                     .unwrap_or_else(|_| panic!("no se pudo crear el nivel {i} del bloom"))
             })
             .collect();
 
         let escena = rl
-            .load_render_texture(thread, WIDTH as u32, HEIGHT as u32)
+            .load_render_texture(thread, ancho, alto)
             .expect("no se pudo crear el buffer de la escena");
         let rayos = rl
-            .load_render_texture(thread, WIDTH as u32, HEIGHT as u32)
+            .load_render_texture(thread, ancho, alto)
             .expect("no se pudo crear el buffer de los god rays");
         let plegada = rl
-            .load_render_texture(thread, WIDTH as u32, HEIGHT as u32)
+            .load_render_texture(thread, ancho, alto)
             .expect("no se pudo crear el buffer del caleidoscopio");
 
         for rt in mips.iter().chain([&escena, &rayos, &plegada]) {
@@ -1747,6 +1769,9 @@ impl PostGpu {
         }
 
         PostGpu {
+            ancho,
+            alto,
+            destino,
             threshold,
             baja,
             sube,
@@ -1805,6 +1830,7 @@ impl PostGpu {
         radio: f32,
         umbral: f32,
     ) {
+        let (bloom_w, bloom_h) = (self.ancho / 2, self.alto / 2);
         // El umbral se manda por cuadro y no una sola vez al arrancar: lo
         // mueve la hora del dia. Ver `SceneParams::bloom_threshold`.
         self.threshold.set_shader_value(self.loc_threshold, umbral);
@@ -1831,8 +1857,8 @@ impl PostGpu {
             let destino = Rectangle {
                 x: 0.0,
                 y: 0.0,
-                width: BLOOM_W as f32,
-                height: BLOOM_H as f32,
+                width: bloom_w as f32,
+                height: bloom_h as f32,
             };
             let mut tb = rl.begin_texture_mode(thread, &mut mips[0]);
             let mut sm = tb.begin_shader_mode(threshold);
@@ -1855,7 +1881,7 @@ impl PostGpu {
         // misma paridad que las `k` que ya tenia. Y al final `mips[0]`
         // queda con paridad par, igual que lo dejo el umbral, asi que la
         // composicion lo sigue leyendo con el `1.0 - y` de siempre.
-        let tam = |i: usize| ((BLOOM_W >> i).max(1) as f32, (BLOOM_H >> i).max(1) as f32);
+        let tam = |i: usize| ((bloom_w >> i).max(1) as f32, (bloom_h >> i).max(1) as f32);
 
         // Los campos por separado: las dos pasadas parten `mips` en dos con
         // `split_at_mut`, y con `self` entero el compilador ve un prestamo
@@ -1932,6 +1958,7 @@ impl PostGpu {
         tex_rt: &Texture2D,
         p: &SceneParams,
     ) {
+        let (ancho_f, alto_f) = (self.ancho as f32, self.alto as f32);
         // Igual que en el bloom: los campos por separado, porque hay que
         // leer la textura del halo mientras se escribe en la de la escena.
         let PostGpu {
@@ -1957,7 +1984,7 @@ impl PostGpu {
             *loc_tint,
             [p.color_shift.x, p.color_shift.y, p.color_shift.z],
         );
-        composite.set_shader_value(*loc_resolution, [WIDTH as f32, HEIGHT as f32]);
+        composite.set_shader_value(*loc_resolution, [ancho_f, alto_f]);
 
         // El origen es el buffer trazado (mas chico que la ventana); el
         // destino es la ventana entera. Ese estirado sale gratis: es la
@@ -1975,8 +2002,8 @@ impl PostGpu {
         let destino = Rectangle {
             x: 0.0,
             y: 0.0,
-            width: WIDTH as f32,
-            height: HEIGHT as f32,
+            width: ancho_f,
+            height: alto_f,
         };
 
         // El segundo sampler. `texture0` lo ata raylib solo con la textura
@@ -2021,6 +2048,7 @@ impl PostGpu {
         luz_pantalla: [f32; 2],
         pulso: f32,
     ) {
+        let (ancho_f, alto_f) = (self.ancho as f32, self.alto as f32);
         // Los haces se encienden con el golpe. Ver `GODRAYS_PULSO`.
         self.godrays.set_shader_value(
             self.loc_gr_exposure,
@@ -2049,14 +2077,14 @@ impl PostGpu {
         let origen = Rectangle {
             x: 0.0,
             y: 0.0,
-            width: WIDTH as f32,
-            height: -(HEIGHT as f32),
+            width: ancho_f,
+            height: -(alto_f),
         };
         let destino = Rectangle {
             x: 0.0,
             y: 0.0,
-            width: WIDTH as f32,
-            height: HEIGHT as f32,
+            width: ancho_f,
+            height: alto_f,
         };
 
         let fuente = escena.texture();
@@ -2079,6 +2107,7 @@ impl PostGpu {
         tex_rt: &Texture2D,
         p: &SceneParams,
     ) {
+        let (ancho_f, alto_f) = (self.ancho as f32, self.alto as f32);
         let PostGpu {
             kaleidoscope,
             rayos,
@@ -2104,14 +2133,14 @@ impl PostGpu {
         let origen = Rectangle {
             x: 0.0,
             y: 0.0,
-            width: WIDTH as f32,
-            height: -(HEIGHT as f32),
+            width: ancho_f,
+            height: -(alto_f),
         };
         let destino = Rectangle {
             x: 0.0,
             y: 0.0,
-            width: WIDTH as f32,
-            height: HEIGHT as f32,
+            width: ancho_f,
+            height: alto_f,
         };
 
         // Segundo sampler, con el mismo cuidado que en el composite: la
@@ -2149,6 +2178,7 @@ impl PostGpu {
         tiempo: f32,
         foco: f32,
     ) {
+        let (ancho_f, alto_f) = (self.ancho as f32, self.alto as f32);
         let PostGpu {
             effects,
             plegada,
@@ -2194,14 +2224,18 @@ impl PostGpu {
         let origen = Rectangle {
             x: 0.0,
             y: 0.0,
-            width: WIDTH as f32,
-            height: -(HEIGHT as f32),
+            width: ancho_f,
+            height: -(alto_f),
         };
+        // El destino va en las coordenadas de quien dibuja: en la ventana son
+        // puntos LOGICOS (en una retina, la mitad de los pixeles reales, que
+        // es lo que la cadena usa como tamano), en el buffer del video son
+        // pixeles. Ver `PostGpu::destino`.
         let destino = Rectangle {
             x: 0.0,
             y: 0.0,
-            width: WIDTH as f32,
-            height: HEIGHT as f32,
+            width: self.destino.0,
+            height: self.destino.1,
         };
 
         // El segundo sampler se ata DESPUES de `begin_shader_mode`, por lo
@@ -2683,9 +2717,9 @@ impl Video {
         self.desde + self.cuadro as f32 / Self::FPS
     }
 
-    /// Le pasa a ffmpeg un cuadro de la pantalla. La primera vez lo
-    /// arranca, porque recien ahi se sabe el tamano real de la ventana (en
-    /// una pantalla retina es el doble del pedido).
+    /// Le pasa a ffmpeg un cuadro del buffer del video (`salida_video`, a
+    /// `VIDEO_W` x `VIDEO_H`). La primera vez lo arranca, con el tamano del
+    /// primer cuadro.
     fn entregar(&mut self, ancho: i32, alto: i32, pixeles: &[Color]) {
         if self.ffmpeg.is_none() {
             let duracion = self.hasta - self.desde;
@@ -2700,8 +2734,7 @@ impl Video {
                 .args(["-s", &format!("{ancho}x{alto}"), "-r", "30", "-i", "-"])
                 .args(["-ss", &format!("{}", self.desde), "-i", musica])
                 .args(["-t", &format!("{duracion}"), "-map", "0:v", "-map", "1:a?"])
-                .args(["-vf", "scale=1280:960:flags=lanczos"])
-                .args(["-c:v", "libx264", "-preset", "slow", "-crf", "23", "-pix_fmt", "yuv420p"])
+                .args(["-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p"])
                 .args(["-c:a", "aac", "-b:a", "192k", &self.salida])
                 .stdin(std::process::Stdio::piped())
                 .spawn()
@@ -2817,6 +2850,22 @@ fn main() {
     .con_relieve(relieve_marmol.clone(), 1.0)
     .con_rugosidad(0.10);
 
+    // EL MARMOL PERLADO DEL TEMPLETE: columnas y techo. Claro, con un poco
+    // de brillo y de reflejo, para que el templete enmarque la fuente en vez
+    // de taparla. Ver `fuente::textura_marmol_perla`.
+    // Especular y reflejo bajos: claro y con tanta luz alrededor (el agua
+    // encendida, los haces, la columna del climax), con mas brillo la cara
+    // de abajo del techo se quemaba en blanco.
+    let marmol_templete = Material::new(
+        [0.85, 0.12, 0.04, 0.0],
+        30.0,
+        0.0,
+        Texture::ImageTexture(Arc::new(fuente::textura_marmol_perla()), Color::WHITE, (0.0, 0.0)),
+        None,
+    )
+    .con_relieve(relieve_marmol.clone(), 0.5)
+    .con_rugosidad(0.08);
+
     // El fondo de la piscina: teal profundo y mate, sin brillo.
     let marmol_fondo = Material::new(
         [0.8, 0.05, 0.0, 0.0],
@@ -2840,12 +2889,19 @@ fn main() {
         Texture::ImageTexture(cargar("fairy_marble.png"), color_f(0.55, 0.50, 0.58), (0.0, 0.0)),
         None,
     )
-    .con_relieve(relieve_marmol.clone(), 1.0)
+    // Relieve a 0.6: a 1.0, sumado al reflejo borroso, el piso salia
+    // moteado como sal y pimienta.
+    .con_relieve(relieve_marmol.clone(), 0.6)
     // La losa de la plaza es el peor caso de la escena: es la superficie
     // grande que refleja la fuente entera, y con reflexion perfecta se leia
     // como una lamina de vidrio puesta sobre la piedra. Piedra pulida y
     // humeda refleja, pero su reflejo esta ESTIRADO y desenfocado.
-    .con_rugosidad(0.13);
+    //
+    // BAJO de 0.13 a 0.08: cada pixel tira UN rayo de reflejo al azar dentro
+    // de ese cono, y con el cono ancho vecinos distintos veian cosas muy
+    // distintas: era el grano que se veia en el piso. Mas angosto, el reflejo
+    // sigue borroso y el grano casi desaparece.
+    .con_rugosidad(0.08);
 
     // --- 3. AGUA ---
     // El corazon visual: en la fuente original el agua ILUMINA todo desde
@@ -3084,7 +3140,7 @@ fn main() {
         let (x, z) = (COLUMNAS_RADIO * angulo.cos(), COLUMNAS_RADIO * angulo.sin());
 
         let columna: Vec<Box<dyn RayIntersect + Send + Sync>> = vec![
-            cubo(x, -0.15, z, 0.7, &marmol),
+            cubo(x, -0.15, z, 0.7, &marmol_templete),
             Box::new(Cylinder {
                 center: Vec3::new(x, 0.0, z),
                 radius: 0.25,
@@ -3093,9 +3149,9 @@ fn main() {
                 // Una vuelta de textura cada unidad: las vetas del marmol
                 // se leen a la misma escala que en los bloques.
                 tile_size: 1.0,
-                material: marmol.clone(),
+                material: marmol_templete.clone(),
             }),
-            cubo(x, COLUMNA_ALTURA, z, 0.6, &marmol),
+            cubo(x, COLUMNA_ALTURA, z, 0.6, &marmol_templete),
         ];
         objects.push(Box::new(GrupoAcotado::new(columna)));
     }
@@ -3109,20 +3165,20 @@ fn main() {
     const TECHO: f32 = 3.5;
     let techo: Vec<Box<dyn RayIntersect + Send + Sync>> = vec![
         // Marco.
-        bloque(0.0, 5.3, TECHO, 8.0, 0.3, 0.5, &marmol),
-        bloque(0.0, 5.3, -TECHO, 8.0, 0.3, 0.5, &marmol),
-        bloque(-TECHO, 5.3, 0.0, 0.5, 0.3, 7.0, &marmol),
-        bloque(TECHO, 5.3, 0.0, 0.5, 0.3, 7.0, &marmol),
+        bloque(0.0, 5.3, TECHO, 8.0, 0.3, 0.5, &marmol_templete),
+        bloque(0.0, 5.3, -TECHO, 8.0, 0.3, 0.5, &marmol_templete),
+        bloque(-TECHO, 5.3, 0.0, 0.5, 0.3, 7.0, &marmol_templete),
+        bloque(TECHO, 5.3, 0.0, 0.5, 0.3, 7.0, &marmol_templete),
         // Moldura de oro por debajo del marco.
         bloque(0.0, 5.15, TECHO, 7.5, 0.1, 0.3, &oro),
         bloque(0.0, 5.15, -TECHO, 7.5, 0.1, 0.3, &oro),
         bloque(-TECHO, 5.15, 0.0, 0.3, 0.1, 7.0, &oro),
         bloque(TECHO, 5.15, 0.0, 0.3, 0.1, 7.0, &oro),
         // Losas, con el hueco de 3 x 3 en el medio.
-        bloque(-2.5, 5.5, 0.0, 2.0, 0.2, 7.0, &marmol),
-        bloque(2.5, 5.5, 0.0, 2.0, 0.2, 7.0, &marmol),
-        bloque(0.0, 5.5, -2.5, 3.0, 0.2, 2.0, &marmol),
-        bloque(0.0, 5.5, 2.5, 3.0, 0.2, 2.0, &marmol),
+        bloque(-2.5, 5.5, 0.0, 2.0, 0.2, 7.0, &marmol_templete),
+        bloque(2.5, 5.5, 0.0, 2.0, 0.2, 7.0, &marmol_templete),
+        bloque(0.0, 5.5, -2.5, 3.0, 0.2, 2.0, &marmol_templete),
+        bloque(0.0, 5.5, 2.5, 3.0, 0.2, 2.0, &marmol_templete),
     ];
     objects.push(Box::new(GrupoAcotado::estatico(techo)));
 
@@ -4232,7 +4288,7 @@ fn main() {
                 salida,
                 desde,
                 hasta: leer("VIDEO_HASTA", analisis.duracion.max(1.0)),
-                muestras: leer("VIDEO_MUESTRAS", 4.0).max(1.0) as u32,
+                muestras: leer("VIDEO_MUESTRAS", 2.0).max(1.0) as u32,
                 cuadro: 0,
                 ffmpeg: None,
             }
@@ -4251,10 +4307,30 @@ fn main() {
         .title("Great Fairy Fountain - trazada con rayos")
         .build();
 
+    // LA VENTANA SE AJUSTA A LA PANTALLA: el 4:3 mas grande que entre en el
+    // 82% del alto del monitor (el resto es la barra de menu, la del titulo y
+    // un margen), sin pasar de `WIDTH` x `HEIGHT`. En una MacBook Air de 13"
+    // 1120 x 840 fijo se salia de la pantalla.
+    let (ventana_w, ventana_h) = {
+        let monitor = raylib::core::window::get_current_monitor();
+        let (mw, mh) = (
+            raylib::core::window::get_monitor_width(monitor),
+            raylib::core::window::get_monitor_height(monitor),
+        );
+        let alto = ((mh as f32 * 0.82) as i32).min(HEIGHT as i32).min(mw * 3 / 4) / 12 * 12;
+        let alto = if alto < 360 { HEIGHT as i32 } else { alto };
+        let ancho = alto * 4 / 3;
+        if ancho != WIDTH as i32 || alto != HEIGHT as i32 {
+            rl.set_window_size(ancho, alto);
+            rl.set_window_position((mw - ancho) / 2, ((mh - alto) / 2).max(30));
+        }
+        (ancho as usize, alto as usize)
+    };
+
     // El buffer del trazador. Se crea UNA vez y se reusa toda la corrida:
     // el tamano no cambia nunca.
     let (traza_w, traza_h) = if video.is_some() {
-        (RENDER_W as usize * 2, RENDER_H as usize * 2)
+        (VIDEO_W as usize, VIDEO_H as usize)
     } else {
         (RENDER_W as usize, RENDER_H as usize)
     };
@@ -4276,7 +4352,37 @@ fn main() {
     // Los shaders y los buffers intermedios del post-procesado. Se arman UNA
     // vez: compilar un shader y reservar un framebuffer cuestan
     // milisegundos.
-    let mut post = PostGpu::nuevo(&mut rl, &thread);
+    // En el video toda la cadena trabaja al tamano del video, y la ultima
+    // pasada escribe en `salida_video` en vez de en la ventana.
+    // EN VIVO la cadena trabaja a los pixeles REALES de la ventana: en una
+    // pantalla retina son el doble de los puntos que se piden. Antes iba a
+    // los puntos y la ultima pasada se estiraba al doble: todo el bloom, la
+    // niebla y el realce se veian blandos aunque el trazado no cambiara.
+    let (post_w, post_h, destino) = if video.is_some() {
+        (VIDEO_W, VIDEO_H, (VIDEO_W as f32, VIDEO_H as f32))
+    } else {
+        // Los pixeles reales: los puntos por la escala de la pantalla (se
+        // calcula y no se le pregunta a la ventana, que recien cambio de
+        // tamano y puede no haberse enterado todavia).
+        let escala = rl.get_window_scale_dpi();
+        (
+            (ventana_w as f32 * escala.x) as u32,
+            (ventana_h as f32 * escala.y) as u32,
+            (ventana_w as f32, ventana_h as f32),
+        )
+    };
+    println!(
+        "pantalla: {}x{} logicos, {}x{} reales, escala {:?}",
+        rl.get_screen_width(),
+        rl.get_screen_height(),
+        rl.get_render_width(),
+        rl.get_render_height(),
+        rl.get_window_scale_dpi()
+    );
+    let mut post = PostGpu::nuevo(&mut rl, &thread, post_w, post_h, destino);
+    let mut salida_video: Option<RenderTexture2D> = video.is_some().then(|| {
+        rl.load_render_texture(&thread, VIDEO_W, VIDEO_H).expect("no se pudo crear el buffer del video")
+    });
 
     let mut antialias = false;
 
@@ -4296,7 +4402,7 @@ fn main() {
     println!("  T        antialiasing temporal (gratis; prendido)");
     println!("  H        mostrar / ocultar la ayuda en pantalla");
     println!("  F        guardar una foto (PNG) del cuadro en pantalla");
-    println!("  trazado fijo a {RENDER_W}x{RENDER_H}, estirado a {WIDTH}x{HEIGHT}");
+    println!("  trazado fijo a {RENDER_W}x{RENDER_H}, estirado a {ventana_w}x{ventana_h}");
     println!("  la camara da vueltas sola siguiendo la cancion; las teclas se suman a su recorrido\n");
 
     let mut anterior = std::time::Instant::now();
@@ -4335,10 +4441,28 @@ fn main() {
     if video.is_some() {
         rl.set_exit_key(None);
     }
+    // `PERFIL=1`: cada 120 cuadros, en que se va el tiempo del cuadro entero.
+    let perfil = std::env::var("PERFIL").is_ok();
+    // En vivo, la CPU traza el cuadro siguiente mientras la GPU dibuja el
+    // anterior (ver el trazado, abajo). En foto y video va en serie: ahi
+    // importa que cada imagen sea la de su instante, no la velocidad.
+    // `SIN_PARALELO=1` lo apaga, para comparar.
+    let en_paralelo = video.is_none() && foto.is_none() && std::env::var("SIN_PARALELO").is_err();
+    // Los hilos de rayon se crean ACA, desde el hilo principal, y no la
+    // primera vez que se traza. En macOS un hilo nace con la prioridad del
+    // que lo crea: creados desde el hilo del trazado nacian con menos, el
+    // sistema los mandaba a los nucleos de eficiencia y el trazado tardaba
+    // el doble.
+    rayon::ThreadPoolBuilder::new().build_global().ok();
+    let mut dibujo_pendiente: Option<(SceneParams, Camera, f32, f32)> = None;
+    // El trazado en tablero de ajedrez, en vivo. `SIN_TABLERO=1` lo apaga.
+    let tablero = std::env::var("SIN_TABLERO").is_err();
+    let mut perfil_suma = [0.0f32; 3];
     while video.is_some() || !rl.window_should_close() {
         // Rellenar el buffer de audio. Va en CADA vuelta: si se saltea, el
         // sonido se corta apenas se vacia lo que raylib tenia por delante.
         reloj.actualizar();
+        let perfil_cuadro = std::time::Instant::now();
 
         let ahora = std::time::Instant::now();
         // El tope evita que un cuadro larguisimo (el primero, o el sistema
@@ -4456,10 +4580,12 @@ fn main() {
         // ---------- LA ESCENA SE MUEVE ----------
         // Antes de trazar, no despues: el cuadro que se dibuja abajo tiene
         // que ser el de este instante de la cancion.
+        let t_escena = std::time::Instant::now();
         animacion::actualizar_escena(&mut objects, &mut lights, &escena, &params);
         // EL ARBOL SE REARMA EN CADA CUADRO. Ver `arboles_de`.
         (arbol, arbol_sombras) = arboles_de(&objects, &occluders);
         avanzar_noche(&mut cielo, &mut lights, &params);
+        let ms_escena = t_escena.elapsed().as_secs_f32() * 1000.0;
 
         // ---------- TRAZADO ----------
         let empezo = std::time::Instant::now();
@@ -4478,8 +4604,220 @@ fn main() {
         };
         cuadro_taa = cuadro_taa.wrapping_add(1);
 
+        // EL DIBUJADO, como macro para poder llamarlo en los dos ordenes: en
+        // serie (foto, video) despues del trazado de este cuadro, y en paralelo
+        // (en vivo) MIENTRAS se traza el cuadro siguiente. Ver `en_paralelo`.
+        macro_rules! dibujar {
+            ($params:expr, $camera:expr, $tiempo:expr, $foco:expr) => {{
+                let params: SceneParams = $params;
+                let camera: Camera = $camera;
+                let tiempo: f32 = $tiempo;
+                let foco: f32 = $foco;
+                // ---------- POST-PROCESADO EN LA GPU ----------
+                //
+                // Toda la cadena menos la ultima pasada escribe en buffers propios,
+                // asi que va afuera del dibujado de la ventana:
+                //
+                //   trazado 400x300 -> bloom (5 pasadas, 200x150)
+                //                   -> composite     (a `escena`,  800x600)
+                //                   -> god rays      (a `rayos`,   800x600)
+                //                   -> caleidoscopio (a `plegada`, 800x600)
+                //
+                // El radio del halo lo pone la cancion: apretado en la intro,
+                // derramado en el coro final. El caleidoscopio pliega solo el fondo
+                // (usa la profundidad que el trazado dejo en el alpha como
+                // mascara), asi que el escenario se ve entero todo el tiempo.
+                post.armar_bloom(
+                    &mut rl,
+                    &thread,
+                    &texture,
+                    params.bloom_radius,
+                    params.bloom_threshold,
+                );
+                post.componer(&mut rl, &thread, &texture, &params);
+                // Los rayos bajan desde la luz cenital: se proyecta con la camara
+                // de ESTE cuadro, la misma que acaba de trazar.
+                post.god_rays(
+                    &mut rl,
+                    &thread,
+                    proyectar_a_pantalla(&camera, lights[0].position),
+                    params.pulso,
+                );
+                post.caleidoscopio(&mut rl, &thread, &texture, &params);
+
+                // En el video el grano va apagado: es ruido distinto en cada cuadro,
+                // o sea justo lo que un compresor de video no puede comprimir, y con
+                // el el archivo pesaba el doble. En vivo se queda.
+                let params = if video.is_some() {
+                    SceneParams { grain_amount: 0.0, ..params }
+                } else {
+                    params
+                };
+                // EN EL VIDEO la ultima pasada no va a la ventana (800 x 600)
+                // sino a un buffer del tamano del video: de ahi sale el cuadro en
+                // alta definicion de verdad, sin estirar.
+                if let Some(salida) = salida_video.as_mut() {
+                    let mut tm = rl.begin_texture_mode(&thread, salida);
+                    tm.clear_background(BACKGROUND);
+                    post.efectos(&mut tm, &texture, &params, tiempo, foco);
+                }
+
+                // ---------- DIBUJADO ----------
+                let mut d = rl.begin_drawing(&thread);
+                d.clear_background(BACKGROUND);
+
+                // La unica pasada que toca la pantalla: separa los canales hacia los
+                // bordes y tira grano encima.
+                // El foco esta en el centro de la fuente: a la distancia de la
+                // camara, en la escala del depth buffer.
+                //
+                // Se calcula SIN el empujon del beat. Ese empujon es una sacudida
+                // de camara, no una decision de encuadre, y un foquista no le
+                // corre atras a cada tiempo: persiguiendolo, el plano de foco
+                // temblaba a ritmo de negra.
+                if let Some(salida) = salida_video.as_ref() {
+                    // La ventana muestra el video achicado, para seguirlo.
+                    let (w, h) = (salida.texture().width as f32, salida.texture().height as f32);
+                    d.draw_texture_pro(
+                        salida.texture(),
+                        Rectangle { x: 0.0, y: 0.0, width: w, height: -h },
+                        Rectangle { x: 0.0, y: 0.0, width: ventana_w as f32, height: ventana_h as f32 },
+                        Vector2::zero(),
+                        0.0,
+                        Color::WHITE,
+                    );
+                } else {
+                    post.efectos(&mut d, &texture, &params, tiempo, foco);
+                }
+
+                // EL HUD NO SALE EN LAS FOTOS.
+                //
+                // El modo `--foto` existe para sacar la imagen final de la escena
+                // —para el informe, para el README, para mirarla— y una imagen con
+                // los cuadros por segundo y los milisegundos por cuadro encima no
+                // es la escena: es una captura de pantalla de un programa. Se
+                // estuvo sacando asi durante todo el desarrollo y todas las
+                // capturas quedaron con el contador quemado en la esquina.
+                //
+                // En vivo el HUD se queda, que es donde sirve: es el numero que
+                // dice si la escena esta pesada, y sin verlo la unica forma de
+                // saberlo es contar los saltos a ojo.
+                if foto.is_none() && video.is_none() {
+                    // El HUD baja para no quedar encima de la banda del formato ancho.
+                    let hud = 10 + (LETTERBOX_ALTO * params.cine * ventana_h as f32) as i32;
+                    d.draw_fps(10, hud);
+                    d.draw_text(
+                        &format!(
+                            "{:>3.0}s / {:.0}s   {}",
+                            tiempo.rem_euclid(analisis.duracion.max(1.0)),
+                            analisis.duracion,
+                            if reloj.hay_musica() { "" } else { "(sin musica)" }
+                        ),
+                        10,
+                        hud + 24,
+                        18,
+                        Color::new(180, 120, 200, 255),
+                    );
+                    // Lo que cuesta el cuadro, a la vista. Es el numero que dice si la
+                    // escena esta pesada, y sin verlo la unica forma de saberlo es
+                    // contar los saltos a ojo.
+                    d.draw_text(
+                        &format!(
+                            "{RENDER_W}x{RENDER_H} -> {ventana_w}x{ventana_h}  ({:.0} ms)",
+                            cuadro_medio * 1000.0
+                        ),
+                        10,
+                        hud + 46,
+                        18,
+                        Color::new(120, 150, 190, 255),
+                    );
+                }
+
+                // La ayuda: los primeros segundos y cuando se pide con H. Se
+                // desvanece sola para no ensuciar la fuente.
+                let desde_arranque = arranque.elapsed().as_secs_f32();
+                if ayuda && foto.is_none() && video.is_none() {
+                    let alpha = if desde_arranque < 8.0 {
+                        255
+                    } else if desde_arranque < 10.0 {
+                        ((10.0 - desde_arranque) / 2.0 * 255.0) as u8
+                    } else {
+                        0
+                    };
+                    if alpha > 0 {
+                        let fondo = Color::new(8, 6, 20, (alpha as u32 * 170 / 255) as u8);
+                        d.draw_rectangle(ventana_w as i32 - 250, 10, 240, 132, fondo);
+                        let texto = Color::new(220, 190, 240, alpha);
+                        let tenue = Color::new(160, 140, 190, alpha);
+                        d.draw_text("Great Fairy Fountain", ventana_w as i32 - 240, 18, 18, texto);
+                        for (i, linea) in [
+                            "mouse / flechas: orbitar",
+                            "rueda / Q E: acercar",
+                            "espacio: pausa   X/T: antialias",
+                            "F: foto   H: ocultar ayuda",
+                        ]
+                        .iter()
+                        .enumerate()
+                        {
+                            d.draw_text(linea, ventana_w as i32 - 240, 46 + i as i32 * 22, 16, tenue);
+                        }
+                    }
+                    if desde_arranque >= 10.0 {
+                        // Ya se fue sola; H la vuelve a traer.
+                        ayuda = false;
+                    }
+                }
+
+                // EL CUADRO DEL VIDEO se lee ANTES de cerrar el dibujado: despues
+                // del intercambio de buffers lo que queda atras no esta garantizado.
+                if let (Some(v), Some(salida)) = (video.as_mut(), salida_video.as_ref()) {
+                    // Un RenderTexture se lee de abajo hacia arriba: se da vuelta.
+                    let mut imagen = salida.texture().load_image().expect("no se pudo leer el cuadro del video");
+                    imagen.flip_vertical();
+                    v.entregar(imagen.width(), imagen.height(), &imagen.get_image_data());
+                }
+
+                drop(d);
+            }};
+        }
+
         let t_trazado = std::time::Instant::now();
-        if let Some(v) = &video {
+        if en_paralelo {
+            // LA CPU Y LA GPU A LA VEZ. El trazado de ESTE cuadro corre en
+            // otro hilo (que reparte las filas entre todos los nucleos),
+            // y mientras tanto el hilo principal le pasa a la GPU el cuadro
+            // ANTERIOR, que ya esta en la textura: bloom, composicion, rayos,
+            // efectos y el intercambio de buffers. Antes eso eran unos 7 ms
+            // por cuadro con la CPU esperando; ahora se tapan con el trazado.
+            // El costo es un cuadro de retraso en pantalla (~20 ms).
+            let ambiente = ambiente_de(params.luz_del_dia, params.swell);
+            let fase_agua = params.tiempo * animacion::AGUA_VELOCIDAD;
+            // EL TABLERO (ver `Framebuffer::tablero`): solo con el acumulador
+            // prendido, que es el que completa la otra mitad.
+            framebuffer.tablero = (tablero && taa && !antialias).then_some(cuadro_taa % 2);
+            let (objs, cie, arb, arbs, luc, fb) =
+                (&objects, &cielo, &arbol, &arbol_sombras, &lights, &mut framebuffer);
+            let pendiente = dibujo_pendiente.take();
+            std::thread::scope(|s| {
+                let hilo = s.spawn(move || {
+                    fb.clear();
+                    render(
+                        fb, objs, cie, arb, arbs, luc, &camera, MAX_DEPTH, antialias, jitter,
+                        ambiente, fase_agua, cuadro_taa, || {},
+                    );
+                    fb.rellenar_tablero();
+                });
+                if let Some((p, c, t, f)) = pendiente {
+                    dibujar!(p, c, t, f);
+                }
+                // Mientras termina, el audio no puede quedarse sin datos.
+                while !hilo.is_finished() {
+                    reloj.actualizar();
+                    std::thread::sleep(std::time::Duration::from_micros(300));
+                }
+                hilo.join().expect("se cayo el hilo del trazado");
+            });
+        } else if let Some(v) = &video {
             // Varias muestras por pixel, repartidas por Halton, promediadas
             // a mano. El acumulador temporal no se usa: recorta la historia
             // contra la vecindad del cuadro nuevo, que es lo que hace falta
@@ -4591,149 +4929,28 @@ fn main() {
             );
         }
 
-        // ---------- POST-PROCESADO EN LA GPU ----------
-        //
-        // Toda la cadena menos la ultima pasada escribe en buffers propios,
-        // asi que va afuera del dibujado de la ventana:
-        //
-        //   trazado 400x300 -> bloom (5 pasadas, 200x150)
-        //                   -> composite     (a `escena`,  800x600)
-        //                   -> god rays      (a `rayos`,   800x600)
-        //                   -> caleidoscopio (a `plegada`, 800x600)
-        //
-        // El radio del halo lo pone la cancion: apretado en la intro,
-        // derramado en el coro final. El caleidoscopio pliega solo el fondo
-        // (usa la profundidad que el trazado dejo en el alpha como
-        // mascara), asi que el escenario se ve entero todo el tiempo.
-        post.armar_bloom(
-            &mut rl,
-            &thread,
-            &texture,
-            params.bloom_radius,
-            params.bloom_threshold,
-        );
-        post.componer(&mut rl, &thread, &texture, &params);
-        // Los rayos bajan desde la luz cenital: se proyecta con la camara
-        // de ESTE cuadro, la misma que acaba de trazar.
-        post.god_rays(
-            &mut rl,
-            &thread,
-            proyectar_a_pantalla(&camera, lights[0].position),
-            params.pulso,
-        );
-        post.caleidoscopio(&mut rl, &thread, &texture, &params);
-
-        // ---------- DIBUJADO ----------
-        let mut d = rl.begin_drawing(&thread);
-        d.clear_background(BACKGROUND);
-
-        // La unica pasada que toca la pantalla: separa los canales hacia los
-        // bordes y tira grano encima.
-        // El foco esta en el centro de la fuente: a la distancia de la
-        // camara, en la escala del depth buffer.
-        //
-        // Se calcula SIN el empujon del beat. Ese empujon es una sacudida
-        // de camara, no una decision de encuadre, y un foquista no le
-        // corre atras a cada tiempo: persiguiendolo, el plano de foco
-        // temblaba a ritmo de negra.
-        let foco = orbita.distancia_de_foco(&params) / Framebuffer::PROFUNDIDAD_MAXIMA;
-        // En el video el grano va apagado: es ruido distinto en cada cuadro,
-        // o sea justo lo que un compresor de video no puede comprimir, y con
-        // el el archivo pesaba el doble. En vivo se queda.
-        let params = if video.is_some() {
-            SceneParams { grain_amount: 0.0, ..params }
+        let foco_actual = orbita.distancia_de_foco(&params) / Framebuffer::PROFUNDIDAD_MAXIMA;
+        if en_paralelo {
+            dibujo_pendiente = Some((params.clone(), camera, tiempo, foco_actual));
         } else {
-            params
-        };
-        post.efectos(&mut d, &texture, &params, tiempo, foco);
-
-        // EL HUD NO SALE EN LAS FOTOS.
-        //
-        // El modo `--foto` existe para sacar la imagen final de la escena
-        // —para el informe, para el README, para mirarla— y una imagen con
-        // los cuadros por segundo y los milisegundos por cuadro encima no
-        // es la escena: es una captura de pantalla de un programa. Se
-        // estuvo sacando asi durante todo el desarrollo y todas las
-        // capturas quedaron con el contador quemado en la esquina.
-        //
-        // En vivo el HUD se queda, que es donde sirve: es el numero que
-        // dice si la escena esta pesada, y sin verlo la unica forma de
-        // saberlo es contar los saltos a ojo.
-        if foto.is_none() && video.is_none() {
-            // El HUD baja para no quedar encima de la banda del formato ancho.
-            let hud = 10 + (LETTERBOX_ALTO * params.cine * HEIGHT as f32) as i32;
-            d.draw_fps(10, hud);
-            d.draw_text(
-                &format!(
-                    "{:>3.0}s / {:.0}s   {}",
-                    tiempo.rem_euclid(analisis.duracion.max(1.0)),
-                    analisis.duracion,
-                    if reloj.hay_musica() { "" } else { "(sin musica)" }
-                ),
-                10,
-                hud + 24,
-                18,
-                Color::new(180, 120, 200, 255),
-            );
-            // Lo que cuesta el cuadro, a la vista. Es el numero que dice si la
-            // escena esta pesada, y sin verlo la unica forma de saberlo es
-            // contar los saltos a ojo.
-            d.draw_text(
-                &format!(
-                    "{RENDER_W}x{RENDER_H} -> {WIDTH}x{HEIGHT}  ({:.0} ms)",
-                    cuadro_medio * 1000.0
-                ),
-                10,
-                hud + 46,
-                18,
-                Color::new(120, 150, 190, 255),
-            );
+            dibujar!(params.clone(), camera, tiempo, foco_actual);
         }
-
-        // La ayuda: los primeros segundos y cuando se pide con H. Se
-        // desvanece sola para no ensuciar la fuente.
-        let desde_arranque = arranque.elapsed().as_secs_f32();
-        if ayuda && foto.is_none() && video.is_none() {
-            let alpha = if desde_arranque < 8.0 {
-                255
-            } else if desde_arranque < 10.0 {
-                ((10.0 - desde_arranque) / 2.0 * 255.0) as u8
-            } else {
-                0
-            };
-            if alpha > 0 {
-                let fondo = Color::new(8, 6, 20, (alpha as u32 * 170 / 255) as u8);
-                d.draw_rectangle(WIDTH as i32 - 250, 10, 240, 132, fondo);
-                let texto = Color::new(220, 190, 240, alpha);
-                let tenue = Color::new(160, 140, 190, alpha);
-                d.draw_text("Great Fairy Fountain", WIDTH as i32 - 240, 18, 18, texto);
-                for (i, linea) in [
-                    "mouse / flechas: orbitar",
-                    "rueda / Q E: acercar",
-                    "espacio: pausa   X/T: antialias",
-                    "F: foto   H: ocultar ayuda",
-                ]
-                .iter()
-                .enumerate()
-                {
-                    d.draw_text(linea, WIDTH as i32 - 240, 46 + i as i32 * 22, 16, tenue);
-                }
-            }
-            if desde_arranque >= 10.0 {
-                // Ya se fue sola; H la vuelve a traer.
-                ayuda = false;
-            }
-        }
-
-        // EL CUADRO DEL VIDEO se lee ANTES de cerrar el dibujado: despues
-        // del intercambio de buffers lo que queda atras no esta garantizado.
-        if let Some(v) = video.as_mut() {
-            let imagen = d.load_image_from_screen(&thread);
-            v.entregar(imagen.width(), imagen.height(), &imagen.get_image_data());
-        }
-
-        drop(d);
         cuadros += 1;
+        if perfil {
+            perfil_suma[0] += ms_escena;
+            perfil_suma[1] += ms_trazado + ms_acumular + ms_subida;
+            perfil_suma[2] += perfil_cuadro.elapsed().as_secs_f32() * 1000.0;
+            if cuadros % 120 == 0 {
+                let n = 120.0;
+                println!(
+                    "perfil: escena {:.1} ms | trazado+subida {:.1} ms | cuadro entero {:.1} ms",
+                    perfil_suma[0] / n,
+                    perfil_suma[1] / n,
+                    perfil_suma[2] / n
+                );
+                perfil_suma = [0.0; 3];
+            }
+        }
 
         if let Some(v) = &video {
             if v.cuadro % 30 == 0 {
