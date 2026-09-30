@@ -26,11 +26,14 @@ Ni matemática de vectores, ni intersecciones, ni BVH, ni sombreado.
 
 ## Video
 
-**[▶ Ver el video completo (docs/fuente_de_las_hadas.mp4)](docs/fuente_de_las_hadas.mp4)**
-— la canción entera, en **1440×1080** (1080p), grabada con `--video` (59 MB; la versión en
-alta calidad, de 268 MB, se regenera con el mismo comando y no va al repo).
+**[▶ Ver el video en YouTube (1080p)](https://youtu.be/aDA3A-uqBSQ)** — la
+canción entera, en **1440×1080**, grabada con `--video`.
 
-[![La fuente de noche](docs/portada.jpg)](docs/fuente_de_las_hadas.mp4)
+[![La Gran Hada bendiciendo a Link](docs/portada.jpg)](https://youtu.be/aDA3A-uqBSQ)
+
+También está en el repo, comprimido: [docs/fuente_de_las_hadas.mp4](docs/fuente_de_las_hadas.mp4)
+(59 MB; la versión en alta calidad, de 268 MB, se regenera con el mismo
+comando y no va al repo).
 
 ---
 
