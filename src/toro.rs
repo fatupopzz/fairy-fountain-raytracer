@@ -142,6 +142,33 @@ impl Toro {
             }
         }
 
+        // SEGUNDO DESCARTE: la LOSA del anillo. El toro entero vive a menos
+        // de `radio_menor` de su plano; si el rayo cruza esa losa fuera de la
+        // esfera (o no la cruza), no le pega. Para un anillo acostado —como
+        // los halos de invocacion, que son chatos y anchos— la esfera
+        // envolvente es casi toda aire, y esta prueba ahorra la cuartica a la
+        // mayoria de los rayos que pasan por encima o por debajo.
+        let (entra_esfera, sale_esfera) = {
+            let disc = (b * b - c).max(0.0).sqrt();
+            (-b - disc, -b + disc)
+        };
+        let dn = dot(direction, &self.eje) as f64;
+        let on = dot(&oc, &self.eje) as f64;
+        let grosor = self.radio_menor as f64;
+        if dn.abs() < 1e-9 {
+            if on.abs() > grosor {
+                return None;
+            }
+        } else {
+            let (mut t0, mut t1) = ((-grosor - on) / dn, (grosor - on) / dn);
+            if t0 > t1 {
+                std::mem::swap(&mut t0, &mut t1);
+            }
+            if t1 < entra_esfera || t0 > sale_esfera || t1 < EPS || t0 > hasta {
+                return None;
+            }
+        }
+
         let (o, d) = self.al_local(origin, direction);
         let (rr, r2) = ((self.radio_mayor as f64).powi(2), (self.radio_menor as f64).powi(2));
 

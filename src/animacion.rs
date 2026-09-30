@@ -57,7 +57,7 @@ pub struct EscenaViva {
     /// Donde esta el agua: `(indice del grupo, indice del hijo)`. Es un
     /// `Plane` adentro del grupo de la piscina, y cada cuadro se le
     /// escriben la fuerza y la fase del oleaje.
-    agua: Option<(usize, usize)>,
+    agua: Vec<(usize, usize)>,
     /// La emision con la que nacio el agua, para respirar sobre ella.
     agua_emision: Option<Color>,
     /// La Triforce: el grupo del altar y, adentro, los triangulos que
@@ -81,6 +81,14 @@ pub struct EscenaViva {
     isla: Option<crate::isla::IslaViva>,
     /// El pilar de luz del climax: el grupo y el hijo.
     pilar: Option<usize>,
+    /// La Gran Hada. Ver `hada_mayor.rs`.
+    hada_mayor: Option<crate::hada_mayor::HadaMayorViva>,
+    /// La fuente de Ocarina: la cascada de brillos. Ver `fuente.rs`.
+    fuente: Option<crate::fuente::FuenteViva>,
+    /// Los haces de los cristales: (grupo, region, color).
+    haces: Vec<(usize, usize, Color)>,
+    /// El Fuego de Din. Ver `fuego_de_din.rs`.
+    fuego: Option<crate::fuego_de_din::FuegoDeDin>,
 }
 
 /// Una rupia que gira sobre su eje y flota.
@@ -100,7 +108,7 @@ impl EscenaViva {
             estelas: Vec::new(),
             anillos: Vec::new(),
             luces_base: Vec::new(),
-            agua: None,
+            agua: Vec::new(),
             agua_emision: None,
             triforce: None,
             polvo: Vec::new(),
@@ -110,6 +118,10 @@ impl EscenaViva {
             navi: None,
             isla: None,
             pilar: None,
+            hada_mayor: None,
+            fuente: None,
+            haces: Vec::new(),
+            fuego: None,
         }
     }
 
@@ -145,7 +157,7 @@ impl EscenaViva {
     /// Anota donde quedo el plano del agua: el hijo `hijo` del grupo que
     /// va a estar en `objetos[grupo]`.
     pub fn registrar_agua(&mut self, grupo: usize, hijo: usize, emision: Option<Color>) {
-        self.agua = Some((grupo, hijo));
+        self.agua.push((grupo, hijo));
         self.agua_emision = emision;
     }
 
@@ -183,6 +195,22 @@ impl EscenaViva {
 
     pub fn registrar_pilar(&mut self, grupo: usize) {
         self.pilar = Some(grupo);
+    }
+
+    pub fn registrar_hada_mayor(&mut self, hada: crate::hada_mayor::HadaMayorViva) {
+        self.hada_mayor = Some(hada);
+    }
+
+    pub fn registrar_fuente(&mut self, fuente: crate::fuente::FuenteViva) {
+        self.fuente = Some(fuente);
+    }
+
+    pub fn registrar_haz(&mut self, grupo: usize, region: usize, color: Color) {
+        self.haces.push((grupo, region, color));
+    }
+
+    pub fn registrar_fuego(&mut self, fuego: crate::fuego_de_din::FuegoDeDin) {
+        self.fuego = Some(fuego);
     }
 
     pub fn registrar_luces(&mut self, luces: &[Light]) {
@@ -639,8 +667,12 @@ fn actualizar_anillos(
     // El color de cada anillo: los mismos tres de las hadas, para que se
     // lean como de la misma familia que todo lo que flota en la cueva.
     const PALETA: [(f32, f32, f32); ANILLOS] =
-        [(1.0, 0.62, 0.88), (0.52, 0.88, 1.0), (1.0, 0.88, 0.55)];
-    const INCLINACION: [f32; ANILLOS] = [0.42, 1.05, 1.62];
+        // Rosa, lavanda y oro: la paleta de la fuente, suave.
+        [(1.0, 0.62, 0.88), (0.80, 0.70, 1.0), (1.0, 0.88, 0.55)];
+    // Cuanto se aparta cada halo de la horizontal: un bamboleo, nada mas.
+    const BAMBOLEO: [f32; ANILLOS] = [0.10, 0.16, 0.07];
+    // El radio de cada halo, relativo: el de abajo el mas ancho.
+    const RADIO: [f32; ANILLOS] = [1.0, 0.82, 0.64];
     const VELOCIDAD: [f32; ANILLOS] = [0.60, -0.37, 0.23];
 
     for &indice in &escena.anillos {
@@ -656,15 +688,28 @@ fn actualizar_anillos(
                 continue;
             };
 
+            // HALOS DE INVOCACION. Los tres anillos flotan HORIZONTALES,
+            // apilados sobre el cuenco del estrado, apenas bamboleandose: un
+            // circulo magico, no un giroscopio. Antes giraban en tres planos
+            // inclinados alrededor de la Trifuerza, y con la Gran Hada adentro
+            // la cruzaban de costado y la tapaban.
+            //
+            // Cuando el hada sale, SUBEN POR LA COLUMNA DE LUZ y quedan
+            // alrededor de ella, horizontales, a la altura de los pies, la
+            // cintura y el pecho.
+            let hada = params.hada.clamp(0.0, 1.0);
+            let hada = hada * hada * (3.0 - 2.0 * hada);
+            let (centro_hada, _, _, _) = crate::hada_mayor::colocacion(params);
+            let respira = (params.tiempo * 0.9 + k as f32 * 1.7).sin();
+            let sobre_cuenco = Vec3::new(0.0, crate::fuente::CUENCO_Y + 0.35 + k as f32 * 0.42 + 0.06 * respira, 0.0);
+            let sobre_hada = centro_hada + Vec3::new(0.0, (k as f32 - 1.0) * 0.85, 0.0);
+            anillo.centro = sobre_cuenco + (sobre_hada - sobre_cuenco) * hada;
+
             let fase = params.giro_hadas * VELOCIDAD[k] + k as f32 * 2.1;
             let (sf, cf) = fase.sin_cos();
-            let (si, ci) = INCLINACION[k].sin_cos();
+            let (si, ci) = BAMBOLEO[k].sin_cos();
             anillo.set_eje(Vec3::new(si * cf, ci, si * sf));
 
-            // CUANTO BRILLAN: la armonia de su region mas el golpe, y todo
-            // escalado por `cine`. Al principio del tema son tres hilos
-            // apenas visibles y sobre el final son de las cosas que mas
-            // brillan, igual que el resto de la escena.
             let (r, g, b) = PALETA[k];
             // CADA ANILLO SE QUEDA CON UN ATAQUE DE CADA TRES.
             //
@@ -703,7 +748,9 @@ fn actualizar_anillos(
             anillo.radio_menor = ANILLO_GROSOR
                 * (1.0 + destello * 1.10 + params.pulso * 0.35);
             anillo.radio_mayor = ANILLO_RADIO
-                * (1.0 + destello * 0.055 + params.energia_suave * 0.035);
+                * RADIO[k]
+                * (1.0 + destello * 0.055 + params.energia_suave * 0.035)
+                * (1.0 - 0.15 * hada);
 
             let fuerza = (0.20 + params.armonia[k] * 0.45 + destello * 0.85
                 + params.pulso * 0.15)
@@ -811,7 +858,7 @@ pub fn actualizar_escena(
     // piscina no se vea congelado. Todo en funcion de `tiempo`, sin
     // acumular: se dibuje a 5 o a 40 cuadros por segundo, el agua esta en
     // el mismo lugar en el mismo segundo.
-    if let Some((grupo, hijo)) = escena.agua {
+    for &(grupo, hijo) in &escena.agua {
         let agua = objetos
             .get_mut(grupo)
             .and_then(|o| (o.as_mut() as &mut dyn Any).downcast_mut::<GrupoAcotado>())
@@ -958,9 +1005,34 @@ pub fn actualizar_escena(
 
         if let Some(luz) = luz {
             let energia = params.armonia[*region];
+            // Y el destello de su compas (ver `destello_de_cristal`): el
+            // cristal se enciende entero cuando dispara su haz.
+            let destello = destello_de_cristal(params, *region);
             luz.material.emission_color =
-                Some(escalar(*color, CRISTAL_PISO + energia * CRISTAL_RANGO));
+                Some(escalar(*color, CRISTAL_PISO + energia * CRISTAL_RANGO + destello * 1.4));
         }
+    }
+
+    // LOS HACES DE LOS CRISTALES: cada compas dispara uno, en ronda, del
+    // cristal a lo alto del cielo sobre la fuente. Entre disparo y disparo
+    // queda un hilo tenue que sigue a la armonia de su region, de noche.
+    for &(grupo, region, color) in &escena.haces {
+        let Some(haz) = objetos
+            .get_mut(grupo)
+            .and_then(|o| (o.as_mut() as &mut dyn Any).downcast_mut::<GrupoAcotado>())
+        else {
+            continue;
+        };
+        let noche = 1.0 - params.luz_del_dia * 0.85;
+        let k = destello_de_cristal(params, region).max(params.armonia[region] * 0.30 * noche);
+        for hijo in haz.children_mut() {
+            if let Some(c) = (hijo.as_mut() as &mut dyn Any).downcast_mut::<CilindroOrientado>() {
+                c.set_visible(k > 0.03);
+                c.set_radio(0.03 + 0.06 * k);
+                c.material_mut().emission_color = Some(escalar(color, k.min(1.2)));
+            }
+        }
+        haz.recalcular_caja(0.02);
     }
 
     // Las luces: intensidad original por el multiplicador de la cancion.
@@ -982,6 +1054,9 @@ pub fn actualizar_escena(
     // bucle de arriba la pisaria si fuera antes.
     if let Some(isla) = &escena.isla {
         isla.actualizar(objetos, params);
+    }
+    if let Some(fuente) = &escena.fuente {
+        fuente.actualizar(objetos, params);
     }
 
     // EL PILAR DE LUZ: cuando las voces se sostienen (el swell, el climax
@@ -1009,6 +1084,12 @@ pub fn actualizar_escena(
         }
     }
 
+    if let Some(hada) = &escena.hada_mayor {
+        hada.actualizar(objetos, luces, params);
+    }
+    if let Some(fuego) = &escena.fuego {
+        fuego.actualizar(objetos, luces, params);
+    }
     if let (Some(navi), Some(link)) = (&escena.navi, &escena.link) {
         navi.actualizar(objetos, luces, link, params);
     }
@@ -1112,4 +1193,19 @@ mod tests {
             }
         }
     }
+}
+
+/// Cuanto esta disparando el cristal de la region `region`, de 0 a ~1.2: el
+/// destello del ultimo uno de compas que le toco (los compases se reparten
+/// en ronda entre los cuatro cristales), apagandose en un segundo y medio.
+fn destello_de_cristal(params: &SceneParams, region: usize) -> f32 {
+    params
+        .unos
+        .iter()
+        .filter(|(compas, _, _)| compas % 4 == region)
+        .filter_map(|&(_, t0, fuerza)| {
+            let edad = params.tiempo - t0;
+            (0.0..1.5).contains(&edad).then(|| (1.0 - edad / 1.5).powi(2) * fuerza)
+        })
+        .fold(0.0f32, f32::max)
 }

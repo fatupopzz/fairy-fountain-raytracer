@@ -11,7 +11,11 @@ pub enum Limite {
     #[allow(dead_code)]
     Elipse(f32, f32),
     /// Medios lados (en x, en z) de un rectangulo.
+    #[allow(dead_code)]
     Rectangulo(f32, f32),
+    /// Un hexagono regular con esta apotema (distancia del centro a cada
+    /// lado) y un lado mirando a +Z: la piscina de la fuente de Ocarina.
+    Hexagono(f32),
 }
 
 impl Limite {
@@ -23,6 +27,12 @@ impl Limite {
                 ex * ex + ez * ez <= 1.0
             }
             Limite::Rectangulo(a, b) => dx.abs() <= a && dz.abs() <= b,
+            Limite::Hexagono(a) => {
+                // Adentro si la proyeccion sobre las normales de los tres
+                // pares de lados (a 90, 30 y -30 grados) no pasa la apotema.
+                let (s, c) = (0.5f32, 0.866_025_4f32);
+                dz.abs() <= a && (dx * c + dz * s).abs() <= a && (dx * c - dz * s).abs() <= a
+            }
         }
     }
 
@@ -31,6 +41,7 @@ impl Limite {
         match self {
             Limite::Elipse(a, b) => a.max(b),
             Limite::Rectangulo(a, b) => (a * a + b * b).sqrt(),
+            Limite::Hexagono(a) => a * 2.0 / 3.0f32.sqrt(),
         }
     }
 }
@@ -297,6 +308,7 @@ impl RayIntersect for Plane {
         self.limite.map(|l| {
             let (a, b) = match l {
                 Limite::Elipse(a, b) | Limite::Rectangulo(a, b) => (a, b),
+                Limite::Hexagono(a) => (a * 2.0 / 3.0f32.sqrt(), a * 2.0 / 3.0f32.sqrt()),
             };
             // Un pelo de espesor en Y: la caja no puede ser degenerada o
             // el test de rebanadas se queda sin volumen que cruzar.

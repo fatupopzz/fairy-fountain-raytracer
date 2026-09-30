@@ -74,6 +74,21 @@ const AURORA_ALTO: f32 = 1.05;
 const AURORA_ONDA: f32 = 0.07;
 
 
+/// Las olas de la aurora: cuanto viven, a que velocidad corren (radianes de
+/// azimut por segundo) y cuanto miden de ancho.
+const OLA_VIDA: f32 = 2.4;
+const OLA_VELOCIDAD: f32 = 0.9;
+const OLA_ANCHO: f32 = 0.24;
+
+/// Las cuatro paletas de la aurora, una por familia armonica: (filo, cuerpo,
+/// cima). La primera es la clasica (verde, turquesa, magenta).
+const PALETAS_AURORA: [[(f32, f32, f32); 3]; 4] = [
+    [(70.0, 255.0, 140.0), (40.0, 210.0, 200.0), (210.0, 90.0, 255.0)],
+    [(60.0, 220.0, 255.0), (80.0, 150.0, 255.0), (190.0, 110.0, 255.0)],
+    [(255.0, 110.0, 190.0), (220.0, 90.0, 255.0), (140.0, 90.0, 255.0)],
+    [(190.0, 255.0, 110.0), (90.0, 230.0, 150.0), (255.0, 120.0, 170.0)],
+];
+
 /// Cuanto dura una estrella fugaz, en segundos.
 const ESTRELLA_VIDA: f32 = 1.9;
 
@@ -127,6 +142,19 @@ pub struct Cielo {
     /// El golpe del momento (`SceneParams::pulso`): la aurora se enciende
     /// un poco mas en cada tiempo fuerte. Lo pone `musica`.
     pulso: f32,
+    /// LAS OLAS DE LA AURORA: cada ataque del arpa manda una ola de brillo
+    /// que corre por la cortina hacia los dos lados desde un punto del
+    /// cielo. Se guardan como (azimut de salida, edad en segundos).
+    olas: Vec<(f32, f32)>,
+    /// Los tres colores de la cortina (filo, cuerpo, cima), mezclados en cada
+    /// cuadro segun que familia de acordes suena. Ver `musica`.
+    colores: [(f32, f32, f32); 3],
+    /// LA CORONA, de 0 a 1: en el climax la aurora converge en rayos hacia
+    /// el cenit, sobre la fuente, como una corona boreal.
+    corona: f32,
+    /// La fase del compas en tiempos (segundo / periodo del beat): los
+    /// pulsos que suben por la cortina van a este ritmo.
+    fase_beat: f32,
     /// EL MAR DE NUBES que hay debajo de la isla, horneado al arrancar: la
     /// densidad y cuanto le da la luz, por texel de una imagen
     /// equirectangular de la mitad de abajo del cielo. Van aparte de la
@@ -253,13 +281,49 @@ impl Cielo {
             estrellas: Vec::new(),
             swell: 0.0,
             pulso: 0.0,
+            olas: Vec::new(),
+            colores: PALETAS_AURORA[0],
+            corona: 0.0,
+            fase_beat: 0.0,
             nubes: hornear_nubes(),
         }
     }
 
-    /// Lo que la musica le pide al cielo ademas de la hora: el golpe.
-    pub fn musica(&mut self, pulso: f32) {
+    /// Lo que la musica le pide al cielo ademas de la hora: el golpe, los
+    /// ataques del arpa (cada uno una ola por la cortina), la armonia (el
+    /// color de la aurora) y la corona del climax.
+    pub fn musica(&mut self, pulso: f32, ataques: &[(usize, f32)], armonia: [f32; 4], corona: f32, fase_beat: f32) {
         self.pulso = pulso.clamp(0.0, 1.5);
+        self.fase_beat = fase_beat;
+        self.corona = corona.clamp(0.0, 1.0);
+
+        self.olas.clear();
+        for &(n, t0) in ataques.iter().rev() {
+            let edad = self.tiempo - t0;
+            if (0.0..OLA_VIDA).contains(&edad) {
+                self.olas.push((hash2(n as u32, 4441) * 2.0 * PI - PI, edad));
+                if self.olas.len() >= 8 {
+                    break;
+                }
+            }
+        }
+
+        // EL COLOR SIGUE A LOS ACORDES. Cada una de las cuatro familias
+        // armonicas (las mismas que tinen los cristales) tiene su paleta, y
+        // la cortina mezcla las cuatro segun cuanto suene cada una. Cuando el
+        // tema modula, el cielo cambia de color.
+        let pesos: Vec<f32> = (0..4).map(|r| 0.15 + 2.0 * armonia[r].clamp(0.0, 1.0).powi(2)).collect();
+        let total: f32 = pesos.iter().sum();
+        let mut colores = [(0.0f32, 0.0f32, 0.0f32); 3];
+        for (r, paleta) in PALETAS_AURORA.iter().enumerate() {
+            let w = pesos[r] / total;
+            for (c, p) in colores.iter_mut().zip(paleta.iter()) {
+                c.0 += p.0 * w;
+                c.1 += p.1 * w;
+                c.2 += p.2 * w;
+            }
+        }
+        self.colores = colores;
     }
 
     /// Cuanta aurora hay AHORA, de 0 a ~1.3, antes de la forma.
@@ -269,7 +333,8 @@ impl Cielo {
     /// lleva a pleno; encima, cada tiempo fuerte le da un latido. Es lo que
     /// hace que el cielo tambien toque la cancion, y no solo la fuente.
     fn fuerza_aurora(&self) -> f32 {
-        let noche = (1.0 - self.amanecer * 1.6).clamp(0.0, 1.0);
+        // Asoma ya en el atardecer, no solo de noche cerrada.
+        let noche = (1.0 - self.amanecer * 1.25).clamp(0.0, 1.0);
         noche * (0.55 + 0.60 * self.swell + 0.35 * self.pulso)
     }
 
@@ -338,6 +403,9 @@ impl Cielo {
         if !(0.0..AURORA_ALTO).contains(&elevacion) {
             return (0.0, 0.0);
         }
+        // LOS PLIEGUES: la cortina no cuelga derecha, se dobla y se enrosca.
+        // Se tuerce el azimut segun la altura, y la torsion se mueve sola.
+        let azimut = azimut + 0.12 * (elevacion * 7.0 + self.tiempo * 0.5).sin() + 0.05 * (elevacion * 17.0 - self.tiempo * 0.9).sin();
 
         // Todo deriva lento, y un poco mas rapido cuando la cancion empuja.
         let deriva = self.tiempo * (0.045 + 0.02 * self.swell);
@@ -347,13 +415,18 @@ impl Cielo {
         // NITIDO de una aurora de verdad; hacia arriba la luz se deshilacha.
         let mut total = 0.0f32;
         let mut subida_pesada = 0.0f32;
-        for capa in 0..2 {
+        // Dos cortinas siempre, y una tercera ALTA, rojo magenta, que solo
+        // aparece con las voces: las auroras intensas tienen ese borde rojo
+        // arriba de todo.
+        let capas = if self.swell > 0.05 { 3 } else { 2 };
+        for capa in 0..capas {
             let c = capa as f32;
-            let base = 0.07 + c * 0.16
+            let base = 0.07 + c * 0.16 + if capa == 2 { 0.12 } else { 0.0 }
                 + AURORA_ONDA * ((azimut * (1.3 + c * 0.6) + deriva * (1.7 - c)).sin() * 0.6
                     + (azimut * 3.7 - deriva * 2.3 + c * 2.0).sin() * 0.3
                     + (azimut * 8.9 + deriva * 3.1).sin() * 0.1);
-            let alto = 0.40 + 0.16 * (azimut * 2.1 + deriva * 0.7 + c * 1.3).sin();
+            // En el golpe la cortina se ESTIRA hacia arriba y vuelve.
+            let alto = (0.40 + 0.16 * (azimut * 2.1 + deriva * 0.7 + c * 1.3).sin()) * (1.0 + 0.30 * self.pulso);
             let x = (elevacion - base) / alto;
             if !(-0.08..1.0).contains(&x) {
                 continue;
@@ -364,13 +437,26 @@ impl Cielo {
             // Los rayos verticales: finos, brillantes y que se corren solos.
             let rayo = (0.5 + 0.5 * (azimut * (46.0 + c * 17.0) + 3.0 * (azimut * 6.0 + deriva).sin() + deriva * 5.0).sin())
                 .powi(3);
-            let estrias = 0.35 + 0.65 * rayo;
+            // Y TITILAN: cada rayo prende y apaga rapido, desfasado de los
+            // vecinos, como las auroras que bailan.
+            let titila = 0.75 + 0.25 * (self.tiempo * 5.0 + azimut * 31.0 + c * 2.0).sin();
+            let estrias = (0.35 + 0.65 * rayo) * titila;
+            // LOS PULSOS: una banda de brillo sube por la cortina en cada
+            // tiempo del tema, del filo a la cima.
+            let banda = (self.fase_beat + azimut * 0.15).fract();
+            let pulso_sube = 1.0 + 0.9 * (-((x - banda * 1.1) / 0.09).powi(2)).exp() * (0.4 + 0.6 * self.pulso);
             // Los pliegues: la cortina se dobla y donde se dobla se ve mas.
             let pliegue = 0.45 + 0.55 * (0.5 + 0.5 * (azimut * 4.0 + deriva * 1.1 + (azimut * 9.0).sin() * 0.8).sin());
-            let peso = filo * cola * estrias * pliegue * (1.0 - c * 0.45);
+            let peso = filo * cola * estrias * pliegue * pulso_sube
+                * if capa == 2 { 0.55 * self.swell } else { 1.0 - c * 0.45 };
             total += peso;
-            subida_pesada += x.max(0.0) * peso;
+            // La capa alta va con la cima (el color rojo magenta).
+            subida_pesada += if capa == 2 { peso } else { x.max(0.0) * peso };
         }
+        // EL RESPLANDOR: un velo difuso que rodea la cortina y enciende el
+        // cielo alrededor, mas ancho y mas tenue.
+        let resplandor = 0.10 * (1.0 - (elevacion / 0.55).min(1.0)).powi(2);
+        total += resplandor;
         if total <= 0.0 {
             return (0.0, 0.0);
         }
@@ -378,9 +464,37 @@ impl Cielo {
         // No da la vuelta entera: de un lado del cielo esta encendida y del
         // otro casi no, y el lado encendido gira despacio.
         let lobulo = 0.50 + 0.50 * (0.5 + 0.5 * (azimut - deriva * 0.8).sin());
+        // Con las voces el lado apagado tambien se enciende: en el climax la
+        // aurora llena el cielo entero, mire la camara para donde mire.
+        let lobulo = lobulo + (1.0 - lobulo) * self.swell * 0.85;
         let respira = 0.85 + 0.15 * (self.tiempo * 0.57).sin();
 
-        (total * lobulo * respira * self.fuerza_aurora(), subida_pesada / total)
+        // Las olas del arpa: dos frentes por ataque que corren hacia los
+        // lados desde su punto de salida, apagandose.
+        let mut ola = 0.0f32;
+        for &(salida, edad) in &self.olas {
+            let vida = (1.0 - edad / OLA_VIDA).powf(1.5);
+            for sentido in [-1.0f32, 1.0] {
+                let frente = salida + sentido * OLA_VELOCIDAD * edad;
+                let d = ((azimut - frente + PI).rem_euclid(2.0 * PI) - PI) / OLA_ANCHO;
+                ola += (-d * d).exp() * vida;
+            }
+        }
+
+        (total * lobulo * respira * (1.0 + 1.6 * ola) * self.fuerza_aurora(), subida_pesada / total)
+    }
+
+    /// LA CORONA BOREAL: rayos que convergen hacia el cenit, encima de todo.
+    /// Solo existe en el climax. Devuelve el brillo en esta direccion.
+    fn corona(&self, azimut: f32, elevacion: f32) -> f32 {
+        if self.corona <= 0.0 || elevacion < 0.22 {
+            return 0.0;
+        }
+        let deriva = self.tiempo * 0.25;
+        let rayo = (0.5 + 0.5 * (azimut * 22.0 + deriva + (azimut * 3.0).sin() * 2.0).sin()).powi(5);
+        let sube = ((elevacion - 0.22) / 0.5).clamp(0.0, 1.0);
+        let cerca_del_cenit = 1.0 - ((elevacion - 1.2) / 0.35).clamp(0.0, 1.0) * 0.7;
+        self.corona * rayo * sube * sube * cerca_del_cenit * (0.8 + 0.4 * self.pulso)
     }
 
     fn cerca_de_la_luna(&self, d: &Vec3) -> bool {
@@ -573,15 +687,23 @@ impl Cielo {
                 // Verde intenso en el filo, turquesa en el cuerpo y magenta
                 // arriba: la paleta de una aurora de verdad, que ademas es la
                 // de la fuente.
+                let [filo, cuerpo, cima] = self.colores;
                 let (r, g, b) = if subida < 0.35 {
-                    mezcla((70.0, 255.0, 140.0), (40.0, 210.0, 200.0), subida / 0.35)
+                    mezcla(filo, cuerpo, subida / 0.35)
                 } else {
-                    mezcla((40.0, 210.0, 200.0), (210.0, 90.0, 255.0), ((subida - 0.35) / 0.5).min(1.0))
+                    mezcla(cuerpo, cima, ((subida - 0.35) / 0.5).min(1.0))
                 };
                 let f = fuerza.min(1.6);
                 let suma = |base: u8, c: f32| (base as f32 + c * f).min(255.0) as u8;
                 noche = Color::new(suma(noche.r, r), suma(noche.g, g), suma(noche.b, b), 255);
             }
+        }
+
+        // LA CORONA del climax, encima de la aurora.
+        let corona = self.corona((u - 0.5) * 2.0 * PI, (0.5 - v) * PI);
+        if corona > 0.0 {
+            let suma = |base: u8, c: f32| (base as f32 + c * corona).min(255.0) as u8;
+            noche = Color::new(suma(noche.r, 255.0), suma(noche.g, 170.0), suma(noche.b, 245.0), 255);
         }
 
         // LAS ESTRELLAS FUGACES, sumadas encima de todo.

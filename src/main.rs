@@ -69,7 +69,11 @@
 //!   - `animacion.rs`  escribir eso sobre las hadas, el agua y las luces;
 //!   - `link.rs`       Link, con su esqueleto y su pose segun la cancion;
 //!   - `navi.rs`       Navi y las notas de la ocarina;
+//!   - `hada_mayor.rs` la Gran Hada, que sale del agua en el climax;
+//!   - `fuego_de_din.rs` el hechizo que le da a Link, remate del climax;
 //!   - `isla.rs`       la isla flotante, las cascadas y los islotes;
+//!   - `fuente.rs`     la fuente como en Ocarina: pasillo, Trifuerza del
+//!                     piso, estrado, copas, paneles y cascada de brillos;
 //!   - `cielo.rs`      el skybox: estrellas, luna, aurora y mar de nubes;
 //!   - `bvh.rs`        el arbol que evita probar todos los objetos;
 //!   - `cube.rs`       los cuboides de la fuente, la isla y los cristales;
@@ -115,8 +119,11 @@ mod camera;
 mod cielo;
 mod cube;
 mod framebuffer;
+mod fuego_de_din;
+mod fuente;
 mod isla;
 mod grupo_acotado;
+mod hada_mayor;
 mod light;
 mod link;
 mod material;
@@ -147,7 +154,6 @@ use grupo_acotado::GrupoAcotado;
 use light::Light;
 use material::Material;
 use crate::vec3::{cross, dot, normalize, Vec3};
-use plane::{Limite, Plane};
 use ray_intersect::{Intersect, RayIntersect};
 use raylib::prelude::*;
 use rayon::prelude::*;
@@ -231,8 +237,10 @@ const AMBIENTE_AURORA: [f32; 3] = [0.17, 0.35, 0.33];
 fn ambiente_de(luz_del_dia: f32, swell: f32) -> [f32; 3] {
     let d = luz_del_dia.clamp(0.0, 1.0);
     // La aurora no existe de dia (ver `Cielo::aurora`), asi que su tinte se
-    // apaga con la noche igual que ella.
-    let a = swell.clamp(0.0, 1.0) * (1.0 - d) * 0.75;
+    // apaga con la noche igual que ella. Y como ahora vive toda la noche (no
+    // solo con las voces), toda la noche tine un poco la isla; las voces la
+    // llevan a pleno.
+    let a = (0.25 + 0.75 * swell.clamp(0.0, 1.0)) * (1.0 - d) * 0.75;
     let mezcla = |noche: f32, dia: f32, aurora: f32| {
         let hora = noche + (dia - noche) * d;
         hora + (aurora - hora) * a
@@ -1054,6 +1062,7 @@ fn cast_ray(
     // El rayo atraviesa el objeto: el origen se desplaza en direccion
     // OPUESTA a la normal porque el rayo ENTRA a la superficie.
     let mut refraction = Color::new(0, 0, 0, 255);
+    let mut profundidad = zbuffer;
     let peso_refraccion = peso * peso_kt;
     if peso_refraccion > MIN_CONTRIBUCION {
         let refraction_dir = normalize(&refract(
@@ -1066,7 +1075,7 @@ fn cast_ray(
         // vuelve por arriba.
         let lado = if dot(&refraction_dir, &intersect.normal) < 0.0 { -1.0 } else { 1.0 };
         let refraction_origin = intersect.point + intersect.normal * (1e-3 * lado);
-        let (refraction_color, _) = cast_ray(
+        let (refraction_color, detras) = cast_ray(
             &refraction_origin,
             &refraction_dir,
             objects,
@@ -1083,6 +1092,16 @@ fn cast_ray(
             sombras,
         );
         refraction = scale_color(refraction_color, peso_kt);
+        // UN VELO NO TIENE PROFUNDIDAD: lo que es transparente del todo y no
+        // desvia (los haces, el halo de la columna, la cupula del Fuego de
+        // Din, el rayo de la bendicion) informa la distancia de lo que deja
+        // ver. Si no, la niebla y el desenfoque del post-procesado se
+        // calculaban a la distancia del velo, y el cielo detras salia empanado
+        // con la forma del velo.
+        let material = intersect.material;
+        if material.albedo[3] >= 0.99 && (material.refractive_index - 1.0).abs() < 1e-3 {
+            profundidad = if detras >= CIELO_PROFUNDIDAD { CIELO_PROFUNDIDAD } else { zbuffer + detras };
+        }
     }
 
     let shaded = add_colors(lit, add_colors(reflection, refraction));
@@ -1095,6 +1114,7 @@ fn cast_ray(
         Some(emission) => add_colors(shaded, emission),
         None => shaded,
     };
+
     // Y la luz propia del PUNTO, si la tiene: los anillos del golpe en el
     // agua (ver `Plane::ondas`).
     let final_color = match intersect.brillo {
@@ -1102,7 +1122,7 @@ fn cast_ray(
         None => final_color,
     };
 
-    (final_color, zbuffer)
+    (final_color, profundidad)
 }
 
 
@@ -2325,6 +2345,13 @@ struct Plano {
     /// A quien se mira: 0 es la fuente, 1 es Link. En los planos de Link la
     /// orbita se centra en su cabeza, y el radio es la distancia a el.
     link: f32,
+    /// Un corrimiento de la vuelta, en radianes. La vuelta sola deja la
+    /// camara DETRAS de la fuente justo en el climax, y ahi la Gran Hada
+    /// mira hacia Link, o sea hacia el otro lado: se la veria de espaldas.
+    /// Antes del climax la camara da un giro de mas y llega del lado de Link,
+    /// y durante el climax el corrimiento le frena la vuelta: se queda de
+    /// frente, derivando despacio, en vez de pasar por detras de una columna.
+    giro: f32,
 }
 
 /// La cabeza de Link en reposo: el centro de los planos cercanos.
@@ -2350,26 +2377,31 @@ const LINK_CABEZA: Vec3 = Vec3::new(link::PIES.x, link::PIES.y + 1.5, link::PIES
 /// cara y la ocarina, con el cielo detras) y en el 96 esta del lado de la
 /// entrada (por encima del hombro, con la fuente delante de el). El programa
 /// no pelea contra la vuelta: la aprovecha.
-const PROGRAMA: [Plano; 15] = [
-    Plano { t: 0.0, radio: 20.0, phi: 0.34, mira_y: -0.2, link: 0.0 },
-    Plano { t: 22.0, radio: 18.0, phi: 0.27, mira_y: 0.4, link: 0.0 },
-    Plano { t: 37.0, radio: 14.0, phi: 0.20, mira_y: 1.2, link: 0.0 },
-    Plano { t: 45.0, radio: 3.4, phi: 0.10, mira_y: 0.0, link: 1.0 },
-    Plano { t: 51.0, radio: 3.1, phi: 0.14, mira_y: 0.0, link: 1.0 },
-    Plano { t: 62.0, radio: 13.0, phi: 0.15, mira_y: 1.8, link: 0.0 },
-    Plano { t: 83.0, radio: 12.0, phi: 0.12, mira_y: 2.1, link: 0.0 },
-    Plano { t: 93.0, radio: 3.6, phi: 0.24, mira_y: 0.0, link: 1.0 },
-    Plano { t: 102.0, radio: 4.3, phi: 0.18, mira_y: 0.0, link: 1.0 },
-    Plano { t: 112.0, radio: 12.5, phi: 0.10, mira_y: 2.4, link: 0.0 },
-    Plano { t: 124.0, radio: 13.5, phi: 0.08, mira_y: 3.0, link: 0.0 },
-    Plano { t: 146.0, radio: 13.0, phi: 0.07, mira_y: 3.2, link: 0.0 },
-    Plano { t: 158.0, radio: 11.5, phi: 0.14, mira_y: 2.2, link: 0.0 },
-    Plano { t: 172.0, radio: 16.0, phi: 0.25, mira_y: 0.8, link: 0.0 },
-    Plano { t: 183.3, radio: 20.0, phi: 0.34, mira_y: -0.2, link: 0.0 },
+const PROGRAMA: [Plano; 17] = [
+    Plano { t: 0.0, radio: 20.0, phi: 0.34, mira_y: -0.2, link: 0.0, giro: 0.0 },
+    Plano { t: 22.0, radio: 18.0, phi: 0.27, mira_y: 0.4, link: 0.0, giro: 0.0 },
+    Plano { t: 37.0, radio: 14.0, phi: 0.20, mira_y: 1.2, link: 0.0, giro: 0.0 },
+    // De frente a Link, desde arriba del estrado: las dos antorchas lo
+    // enmarcan a los costados.
+    Plano { t: 45.0, radio: 2.8, phi: 0.38, mira_y: 0.0, link: 1.0, giro: -0.29 },
+    Plano { t: 51.0, radio: 2.6, phi: 0.30, mira_y: 0.0, link: 1.0, giro: -0.55 },
+    Plano { t: 62.0, radio: 13.0, phi: 0.15, mira_y: 1.8, link: 0.0, giro: 0.0 },
+    Plano { t: 83.0, radio: 12.0, phi: 0.12, mira_y: 2.1, link: 0.0, giro: 0.0 },
+    Plano { t: 93.0, radio: 3.6, phi: 0.24, mira_y: 0.0, link: 1.0, giro: 0.0 },
+    Plano { t: 102.0, radio: 4.3, phi: 0.18, mira_y: 0.0, link: 1.0, giro: 0.0 },
+    Plano { t: 112.0, radio: 12.5, phi: 0.10, mira_y: 2.4, link: 0.0, giro: 0.0 },
+    Plano { t: 124.0, radio: 13.5, phi: 0.08, mira_y: 3.0, link: 0.0, giro: -2.4 },
+    Plano { t: 134.0, radio: 10.0, phi: 0.06, mira_y: 3.0, link: 0.0, giro: -2.86 },
+    // LA BENDICION: bajo, detras de Link, mirando hacia arriba al hada.
+    Plano { t: 140.0, radio: 6.5, phi: 0.02, mira_y: 3.4, link: 0.4, giro: -3.13 },
+    Plano { t: 146.0, radio: 7.5, phi: 0.05, mira_y: 3.2, link: 0.3, giro: -3.42 },
+    Plano { t: 158.0, radio: 11.5, phi: 0.14, mira_y: 2.2, link: 0.0, giro: -3.42 },
+    Plano { t: 172.0, radio: 16.0, phi: 0.25, mira_y: 0.8, link: 0.0, giro: -3.42 },
+    Plano { t: 183.3, radio: 20.0, phi: 0.34, mira_y: -0.2, link: 0.0, giro: -3.42 },
 ];
 
-/// El plano del programa en el segundo `t` (radio, phi, mira_y, link).
-fn plano_en(t: f32) -> (f32, f32, f32, f32) {
+/// El plano del programa en el segundo `t` (radio, phi, mira_y, link, giro).
+fn plano_en(t: f32) -> (f32, f32, f32, f32, f32) {
     let n = PROGRAMA.len();
     let t = t.rem_euclid(PROGRAMA[n - 1].t);
     let i = PROGRAMA.iter().rposition(|p| p.t <= t).unwrap_or(0).min(n - 2);
@@ -2389,6 +2421,7 @@ fn plano_en(t: f32) -> (f32, f32, f32, f32) {
         // A quien se mira no se interpola con Catmull-Rom: se pasaria de 0
         // a 1 y volveria, y la camara cabecearia. Va con una S.
         a.link + (b.link - a.link) * x * x * (3.0 - 2.0 * x),
+        a.giro + (b.giro - a.giro) * x * x * (3.0 - 2.0 * x),
     )
 }
 
@@ -2454,8 +2487,8 @@ impl Orbita {
 
     /// La distancia, la altura, a donde mira y cuanto mira a Link en este
     /// instante: el programa, la respiracion y lo manual.
-    fn encuadre(&self, tiempo: f32) -> (f32, f32, f32, f32) {
-        let (radio, phi, mira_y, link) = plano_en(tiempo);
+    fn encuadre(&self, tiempo: f32) -> (f32, f32, f32, f32, f32) {
+        let (radio, phi, mira_y, link, giro) = plano_en(tiempo);
         // La respiracion y lo manual se achican en los planos de Link: medio
         // metro de dolly a tres metros de el es un salto, no un respiro.
         let escala = 1.0 - link * 0.8;
@@ -2464,6 +2497,7 @@ impl Orbita {
             (phi + self.phi_manual).clamp(Self::PHI_MIN, Self::PHI_MAX),
             mira_y,
             link,
+            giro,
         )
     }
 
@@ -2475,15 +2509,19 @@ impl Orbita {
     /// La camara de este cuadro. `camera_target_y` de la cancion se suma
     /// como un cabeceo fino alrededor de la altura del plano.
     fn camara_cine(&self, p: &SceneParams) -> Camera {
-        let (radio, phi, mira_y, link) = self.encuadre(p.tiempo);
+        let (radio, phi, mira_y, link, giro) = self.encuadre(p.tiempo);
+        // EL EMPUJON DE SECCION: en cada cambio de seccion del tema la camara
+        // se adelanta un paso y vuelve, asi la estructura de la cancion se ve
+        // en el encuadre. En los planos de Link no: ahi un paso es mucho.
+        let radio = radio - 1.3 * p.acento_seccion * (1.0 - link);
         let fuente = Vec3::new(CAMARA_MIRA.x, mira_y + (p.camera_target_y - 2.0) * 0.5, CAMARA_MIRA.z);
         let centro = CAMARA_MIRA + (LINK_CABEZA - CAMARA_MIRA) * link;
         let mira = fuente + (LINK_CABEZA - fuente) * link;
-        self.alrededor(centro, radio, phi, mira)
+        self.alrededor(centro, radio, phi, mira, giro)
     }
 
-    fn alrededor(&self, centro: Vec3, radio: f32, phi: f32, mira: Vec3) -> Camera {
-        let theta = self.theta();
+    fn alrededor(&self, centro: Vec3, radio: f32, phi: f32, mira: Vec3, giro: f32) -> Camera {
+        let theta = self.theta() + giro;
         let ojo = Vec3::new(
             centro.x + radio * phi.cos() * theta.sin(),
             centro.y + radio * phi.sin(),
@@ -2494,7 +2532,7 @@ impl Orbita {
 
     #[cfg(test)]
     fn desde(&self, radio: f32, phi: f32, mira_y: f32) -> Camera {
-        self.alrededor(CAMARA_MIRA, radio, phi, Vec3::new(CAMARA_MIRA.x, mira_y, CAMARA_MIRA.z))
+        self.alrededor(CAMARA_MIRA, radio, phi, Vec3::new(CAMARA_MIRA.x, mira_y, CAMARA_MIRA.z), 0.0)
     }
 }
 
@@ -2595,7 +2633,8 @@ fn avanzar_noche(cielo: &mut Cielo, lights: &mut [Light], p: &SceneParams) {
     // `Cielo` solo sabe de resplandor del horizonte, y cuanto resplandor
     // hay es exactamente cuanta luz de dia hay.
     cielo.ajustar(p.giro_cielo, p.luz_del_dia, p.tiempo, &p.estrellas, p.swell);
-    cielo.musica(p.pulso);
+    // La corona del climax sale con la Gran Hada.
+    cielo.musica(p.pulso, &p.ataques, p.armonia, p.hada, p.tiempo / p.beat_period.max(0.2));
 
     if let Some(luna) = lights.get_mut(LUZ_LUNA) {
         luna.position = cielo.luna() * 40.0;
@@ -2618,7 +2657,11 @@ fn avanzar_noche(cielo: &mut Cielo, lights: &mut [Light], p: &SceneParams) {
     for (n, &i) in LUZ_ANTORCHAS.iter().enumerate() {
         if let Some(antorcha) = lights.get_mut(i) {
             let ruido = llama(p.tiempo * 3.3 + n as f32 * 11.0, 7 + n as u32 * 31);
-            antorcha.intensity = 2.4 * (0.72 + ruido * 0.38 + p.pulso * 0.12);
+            // 1.3 y no 2.4: las antorchas de cono estan pegadas al marmol
+            // blanco de la fuente (las de antes estaban sobre la escalinata
+            // oscura), y con la potencia vieja el borde de la piscina
+            // quemaba y el bloom se comia el centro del cuadro.
+            antorcha.intensity = 1.3 * (0.72 + ruido * 0.38 + p.pulso * 0.12);
         }
     }
 }
@@ -2779,7 +2822,7 @@ fn main() {
         [0.8, 0.05, 0.0, 0.0],
         10.0,
         0.0,
-        Texture::ImageTexture(cargar("fairy_marble.png"), color_f(0.30, 0.45, 0.50), (0.0, 0.0)),
+        Texture::ImageTexture(cargar("fairy_marble.png"), color_f(0.32, 0.46, 0.52), (0.0, 0.0)),
         None,
     )
     .con_relieve(relieve_marmol.clone(), 1.0)
@@ -2813,11 +2856,14 @@ fn main() {
         [0.25, 0.3, 0.5, 0.6],
         120.0,
         1.33,
-        Texture::ImageTexture(cargar("water_fairy.png"), color_f(0.25, 0.55, 0.65), (0.0, 0.0)),
+        // CELESTE PALIDO, como el agua de la fuente en la version original de
+        // Ocarina of Time. (Se probo verde, como la de estilo egipcio de la
+        // version de 3DS, y no se leia como la fuente que uno recuerda.)
+        Texture::ImageTexture(cargar("water_fairy.png"), color_f(0.33, 0.70, 0.78), (0.0, 0.0)),
         // Bajada de (0.05, 0.15, 0.18) con el post-procesado en lineal: con
         // Fresnel y el bloom sumando, la piscina entera se iba a cyan
         // reventado.
-        Some(color_f(0.04, 0.11, 0.14)),
+        Some(color_f(0.03, 0.09, 0.11)),
     )
     // Poca: el agua quieta es casi un espejo. Lo justo para que el borde
     // entre el cielo reflejado y el agua deje de ser un recorte con filo
@@ -2902,18 +2948,6 @@ fn main() {
         )
     };
 
-    // --- 8. FUEGO DE ANTORCHA ---
-    // Naranja caliente y emisivo: es lo unico calido de toda la escena, y
-    // por eso funciona. Todo lo demas es teal, rosa y violeta; dos puntos
-    // de fuego en la entrada le dan al cuadro un contraste de temperatura
-    // que ninguna cantidad de bloom puede fabricar.
-    let fuego = Material::new(
-        [1.0, 0.0, 0.0, 0.0],
-        1.0,
-        0.0,
-        Texture::Solid(color_f(1.0, 0.75, 0.4)),
-        Some(color_f(1.0, 0.55, 0.15)),
-    );
 
     // La luz que vive ADENTRO de cada cristal. Cuatro colores, uno por
     // racimo, porque cada uno se queda con un tercio del circulo de
@@ -3031,73 +3065,9 @@ fn main() {
 
 
     // --- 2. LA PISCINA ---
-    // Cuadrada, de 6 x 6, con cuatro bordes de marmol y el fondo hundido.
-    // (Lo octogonal de la fuente original se aproximaba con escaleras de
-    // cubitos en las esquinas y se veia peor que el cuadrado limpio.)
-    const PISCINA: f32 = 3.0;
-    let mut piscina: Vec<Box<dyn RayIntersect + Send + Sync>> = vec![
-        bloque(0.0, 0.25, PISCINA, 6.0, 0.8, 0.6, &marmol),
-        bloque(0.0, 0.25, -PISCINA, 6.0, 0.8, 0.6, &marmol),
-        bloque(-PISCINA, 0.25, 0.0, 0.6, 0.8, 6.0, &marmol),
-        bloque(PISCINA, 0.25, 0.0, 0.6, 0.8, 6.0, &marmol),
-        // El fondo, visible a traves del agua: marmol mas oscuro y mate,
-        // para que lo que se vea a traves del agua sea el agua y no una
-        // losa blanca iluminada.
-        //
-        // El mosaico subio de 0.7 a 1.6 repeticiones por unidad. Con 0.7
-        // una repeticion de la textura medi­a metro y medio de mundo,
-        // asi que la veta del marmol salia AMPLIFICADA diez veces y lo
-        // que se veia por debajo del agua no eran baldosas: era un
-        // remolino azul gigante, el unico objeto psicodelico de una
-        // escena que no lo es. A 1.6 cada baldosa mide 0.6 y el fondo se
-        // lee como el fondo embaldosado de una piscina, que ademas es lo
-        // que le da ESCALA a la piscina: sin un patron repetido de
-        // tamano conocido, un cuadrado de color no dice si mide dos
-        // metros o veinte.
-        Box::new(
-            Cube::new_rect(Vec3::new(0.0, -0.3, 0.0), 5.5, 0.2, 5.5, marmol_fondo.clone())
-                .con_mosaico(1.6),
-        ),
-        // Una linea de oro sobre cada borde.
-        bloque(0.0, 0.7, PISCINA, 5.5, 0.1, 0.3, &oro),
-        bloque(0.0, 0.7, -PISCINA, 5.5, 0.1, 0.3, &oro),
-        bloque(-PISCINA, 0.7, 0.0, 0.3, 0.1, 5.5, &oro),
-        bloque(PISCINA, 0.7, 0.0, 0.3, 0.1, 5.5, &oro),
-    ];
+    // Hexagonal, como la de la fuente del juego: la arma `fuente.rs` junto
+    // con el resto de la fuente.
 
-    // El agua: UN plano liso a y = 0.1, recortado al cuadrado interior de
-    // los bordes. Un plano infinito a esa altura cubriria la cueva entera.
-    // Sin oleaje: el agua de la fuente no se mueve.
-    // Con oleaje: anillos que salen del pedestal y viajan hacia los
-    // bordes. La fuerza la pone la cancion (el bajo) y la fase el tiempo,
-    // en `animacion::actualizar_escena`; aca solo se deja armada.
-    const AGUA_Y: f32 = 0.1;
-    piscina.push(Box::new(Plane {
-        point: Vec3::new(0.0, AGUA_Y, 0.0),
-        normal: Vec3::new(0.0, 1.0, 0.0),
-        ripple_center: Vec3::zeros(),
-        ripple_strength: 0.08,
-        ripple_scale: 3.0,
-        ripple_phase: 0.0,
-        // La red de causticas de `water_fairy.png` se repite cada 0.8
-        // unidades (antes cada dos).
-        //
-        // La textura del agua ahora ES una red de causticas —filamentos
-        // de luz irregulares, que es el patron que dibuja una superficie
-        // ondulada al concentrar la luz— y una caustica se lee como
-        // caustica por la DENSIDAD de la red. Estirada a dos unidades por
-        // celda quedaban tres celdas en toda la piscina y el patron se
-        // leia como manchas; a 0.8 entran siete y se lee como agua.
-        uv_scale: 1.25,
-        limite: Some(Limite::Rectangulo(PISCINA - 0.3, PISCINA - 0.3)),
-        material: agua.clone(),
-        ondas: Vec::new(),
-        // Rosa de hada: sobre el cyan del agua es el color que mas se
-        // separa, y en blanco se leia como espuma.
-        onda_color: (1.0, 0.45, 0.88),
-    }));
-    escena.registrar_agua(objects.len(), piscina.len() - 1, agua.emission_color);
-    objects.push(Box::new(GrupoAcotado::estatico(piscina)));
 
     // --- 3. LAS COLUMNAS ---
     // Seis, en circulo de radio 3.5 alrededor de la piscina. El angulo
@@ -3131,14 +3101,13 @@ fn main() {
     }
 
     // --- 4. EL TECHO ---
-    // Dos vigas en cruz sobre los capiteles, un marco alrededor con su
-    // moldura de oro, y cuatro losas que dejan el CENTRO ABIERTO: por ahi
-    // entra el cielo y la luz cenital cae sobre la Triforce.
+    // Un marco sobre los capiteles con su moldura de oro, y cuatro losas que
+    // dejan el CENTRO ABIERTO: por ahi entra el cielo, y por ahi sale la
+    // columna de luz del climax. Tenia dos vigas en cruz que pasaban justo
+    // por el centro; se sacaron porque cortaban la columna y le pasaban por
+    // encima a la Gran Hada.
     const TECHO: f32 = 3.5;
     let techo: Vec<Box<dyn RayIntersect + Send + Sync>> = vec![
-        // Vigas.
-        bloque(0.0, 5.0, 0.0, 8.0, 0.5, 0.8, &marmol),
-        bloque(0.0, 5.0, 0.0, 0.8, 0.5, 8.0, &marmol),
         // Marco.
         bloque(0.0, 5.3, TECHO, 8.0, 0.3, 0.5, &marmol),
         bloque(0.0, 5.3, -TECHO, 8.0, 0.3, 0.5, &marmol),
@@ -3157,64 +3126,22 @@ fn main() {
     ];
     objects.push(Box::new(GrupoAcotado::estatico(techo)));
 
-    // --- 5. PEDESTAL Y TRIFORCE ---
-    // En el centro del agua: dos cubos de obsidiana apilados (el de abajo
-    // medio hundido, asi emerge del agua) y encima los tres triangulos de
-    // oro de la Triforce, en el plano XY mirando a +Z, hacia la camara.
-    // Los vertices van en sentido antihorario vistos desde +Z: el Triangle
-    // saca la normal de ese orden y no la voltea. La camara nunca pasa
-    // detras (la orbita se topa antes), asi que con una cara alcanza.
-    let mut altar: Vec<Box<dyn RayIntersect + Send + Sync>> = vec![
-        cubo(0.0, 0.1, 0.0, 0.9, &obsidiana),
-        cubo(0.0, 0.85, 0.0, 0.62, &obsidiana),
-    ];
-    let triforce = |v0: (f32, f32), v1: (f32, f32), v2: (f32, f32)| {
-        Box::new(Triangle {
-            a: Vec3::new(v0.0, v0.1, 0.0),
-            b: Vec3::new(v1.0, v1.1, 0.0),
-            c: Vec3::new(v2.0, v2.1, 0.0),
-            uv_a: None,
-            uv_b: None,
-            uv_c: None,
-            material: oro_sagrado.clone(),
-        }) as Box<dyn RayIntersect + Send + Sync>
-    };
-    // EL TAMANO IMPORTA MAS DE LO QUE PARECE. Estos tres triangulos median
-    // 0.8 de ancho, que a once unidades de camara son treinta y cinco
-    // pixeles del cuadro trazado: el HUECO del medio, que es la mitad de
-    // eso, caia en diecisiete, y el bloom —que sobre el oro emisivo llega a
-    // derramarse cincuenta— lo tapaba por completo. El resultado era que la
-    // Triforce, que es el simbolo por el que se reconoce toda la escena, se
-    // leia como un triangulo amarillo solido.
-    //
-    // A 1.36 de ancho el hueco mide sesenta pixeles en pantalla y sobrevive
-    // al halo. Es el objeto que da sentido al resto: merece el tamano.
-    const TRI: f32 = 0.68;
-    const TRI_Y: f32 = 1.30;
-    const TRI_ALTO: f32 = 0.68;
-    altar.push(triforce(
-        (-TRI, TRI_Y),
-        (0.0, TRI_Y),
-        (-TRI / 2.0, TRI_Y + TRI_ALTO),
-    ));
-    altar.push(triforce(
-        (0.0, TRI_Y),
-        (TRI, TRI_Y),
-        (TRI / 2.0, TRI_Y + TRI_ALTO),
-    ));
-    altar.push(triforce(
-        (-TRI / 2.0, TRI_Y + TRI_ALTO),
-        (TRI / 2.0, TRI_Y + TRI_ALTO),
-        (0.0, TRI_Y + TRI_ALTO * 2.0),
-    ));
-    // Los tres triangulos son los hijos 2, 3 y 4 del altar: la cancion
-    // los hace latir.
-    let emision_triforce = oro_sagrado.emission_color.unwrap_or(Color::WHITE);
-    escena.registrar_triforce(
-        objects.len(),
-        (2..5).map(|i| (i, emision_triforce)).collect(),
+    // --- 5. LA FUENTE DE OCARINA ---
+    // El pasillo de baldosas rosas, la Trifuerza incrustada en el piso, el
+    // estrado con el cuenco de donde sale la Gran Hada, las copas de jade,
+    // los paneles tallados y la cascada de brillos. Ver `fuente.rs`.
+    let fuente_viva = fuente::armar(
+        &mut objects,
+        &mut escena,
+        &fuente::Materiales {
+            oro: &oro,
+            oro_sagrado: &oro_sagrado,
+            obsidiana: &obsidiana,
+            agua: &agua,
+            fondo: &marmol_fondo,
+        },
     );
-    objects.push(Box::new(GrupoAcotado::new(altar)));
+    escena.registrar_fuente(fuente_viva);
 
     // --- 5a. LOS ANILLOS DE LA TRIFUERZA ---
     //
@@ -3233,8 +3160,8 @@ fn main() {
     // leccion ya la dejaron las estelas). Girando, un anillo barre la
     // esfera de radio `ANILLO_RADIO + ANILLO_GROSOR`, y esa tiene que ser
     // su caja de nacimiento.
-    // EL PILAR DE LUZ del climax: un cilindro emisivo que sale de la punta
-    // de la Trifuerza y se pierde en el cielo. Arranca con radio cero (no
+    // EL PILAR DE LUZ del climax: un cilindro emisivo que sale del cuenco
+    // del estrado (de donde sale la Gran Hada) y se pierde en el cielo. Arranca con radio cero (no
     // existe) y lo abre la animacion con el swell. El margen de su caja es
     // el radio maximo, porque el arbol se arma una vez.
     //
@@ -3245,7 +3172,7 @@ fn main() {
     // solo cilindro de color parejo se leia como un tubo pintado.
     let pilar = |radio: f32, transparencia: f32| {
         Box::new(Cylinder {
-            center: Vec3::new(0.0, TRI_Y + TRI_ALTO * 2.0 + 0.05, 0.0),
+            center: Vec3::new(0.0, fuente::CUENCO_Y, 0.0),
             radius: radio,
             height: 45.0,
             inner_radius: 0.0,
@@ -3368,6 +3295,30 @@ fn main() {
         objects.push(Box::new(GrupoAcotado::estatico(racimo)));
     }
 
+    // LOS HACES DE LOS CRISTALES: de la punta de cada cristal grande hacia
+    // un punto alto sobre el centro de la fuente, asi los cuatro se cruzan
+    // encima del techo como una corona. Arrancan apagados; los dispara la
+    // cancion, uno por compas (ver `animacion::destello_de_cristal`).
+    for (region, (sx, sz)) in [(1.0f32, 1.0f32), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let punta = Vec3::new(4.9 * sx, -0.4 + 1.5 + 0.7, 4.9 * sz);
+        let cima = Vec3::new(0.0, 13.0, 0.0);
+        let (r, g, b) = CRISTAL_COLORES[region];
+        let color = color_f(r, g, b);
+        // Transparente: el haz SUMA su luz a lo que hay detras y no lo tapa.
+        // Opaco, un haz tenue se veia como una linea negra cruzando el cielo.
+        let haz = Material::new([0.0, 0.0, 0.0, 1.0], 1.0, 1.0, Texture::Solid(Color::WHITE), Some(Color::BLACK));
+        let mut cilindro = cylinder::CilindroOrientado::nuevo(punta, cima, 0.0, 1.0, haz);
+        cilindro.set_visible(false);
+        escena.registrar_haz(objects.len(), region, color);
+        objects.push(Box::new(GrupoAcotado::con_margen(
+            vec![Box::new(cilindro) as Box<dyn RayIntersect + Send + Sync>],
+            0.1,
+        )));
+    }
+
     // --- 5d. LAS RUPIAS ---
     // Tres, flotando y girando despacio sobre el agua. Cada una es una
     // BIPIRAMIDE HEXAGONAL: seis triangulos desde la punta de arriba al
@@ -3441,22 +3392,14 @@ fn main() {
     // entrada subia el cuadro de 38 a 45 milisegundos; metidas en un grupo
     // (que se descarta con una sola cuenta si el rayo pasa lejos), la
     // lista vuelve a medir lo que medía antes.
-    let mut entrada: Vec<Box<dyn RayIntersect + Send + Sync>> = vec![
+    // Las antorchas ya no van aca: son las de cono de la fuente de Ocarina,
+    // a los costados del pasillo (ver `fuente.rs`).
+    let entrada: Vec<Box<dyn RayIntersect + Send + Sync>> = vec![
         bloque(0.0, -0.2, 4.0, 3.2, 0.4, 0.6, &marmol),
         bloque(0.0, -0.03, 3.5, 3.2, 0.75, 0.4, &marmol),
         bloque(0.0, 0.0, 4.3, 3.0, 0.06, 0.06, &oro),
         bloque(0.0, 0.35, 3.7, 3.0, 0.06, 0.06, &oro),
     ];
-    for lado in [-1.0f32, 1.0] {
-        let (x, z) = (lado * 1.9, 4.5);
-        entrada.push(bloque(x, 0.15, z, 0.16, 1.3, 0.16, &obsidiana));
-        entrada.push(bloque(x, 0.85, z, 0.30, 0.12, 0.30, &oro));
-        entrada.push(Box::new(Sphere {
-            center: Vec3::new(x, 0.98, z),
-            radius: 0.13,
-            material: fuego.clone(),
-        }));
-    }
     objects.push(Box::new(GrupoAcotado::estatico(entrada)));
 
     // LINK, tocando la ocarina en el escalon de la entrada. Ver `link.rs`.
@@ -3617,15 +3560,14 @@ fn main() {
     }
 
     // --- 7. POLVO DE HADA ---
-    // Sesenta esferas DIMINUTAS esparcidas por el volumen de la
-    // fuente: particulas de polvo magico en el aire. Mas debiles que las
-    // hadas, pero con el bloom se leen como puntitos de brillo. Las
-    // posiciones salen de un hash del indice, asi el polvo es el mismo en
-    // cada corrida. No se registran en la escena viva: son decoracion
-    // constante, sin sync.
+    // Treinta esferas DIMINUTAS esparcidas por el volumen de la fuente:
+    // particulas de polvo magico en el aire. Mas debiles que las hadas, pero
+    // con el bloom se leen como puntitos de brillo. Las posiciones salen de un
+    // hash del indice, asi el polvo es el mismo en cada corrida. Eran
+    // sesenta; con la lluvia de brillos llenando el aire alcanza con la
+    // mitad.
     //
-    // Van en cuatro grupos, uno por cuadrante en x y z, para que un rayo
-    // que pasa lejos descarte de a nueve con una sola cuenta.
+    // Cada una va en su propio grupo acotado (ver mas abajo).
     let polvo = Material::new(
         [1.0, 0.0, 0.0, 0.0],
         1.0,
@@ -3640,7 +3582,7 @@ fn main() {
     // recta vista con tres escalas); con un multiplicador propio por eje
     // se desparraman.
     let hash = |i: u64, mult: u64| ((i.wrapping_mul(mult)) >> 16) as f32;
-    for i in 0..60u64 {
+    for i in 0..30u64 {
         let x = (hash(i, 2_654_435_761) % 600.0) / 100.0 - 3.0;
         let y = (hash(i, 2_246_822_519) % 450.0) / 100.0 + 0.5;
         let z = (hash(i, 3_266_489_917) % 600.0) / 100.0 - 3.0;
@@ -3697,7 +3639,11 @@ fn main() {
         //    esta por encima del cubo de arriba y por debajo de la
         //    Triforce, que es emisiva y no tapa. El cyan queda ACA, que es
         //    donde corresponde: el agua es la fuente del azul.
-        Light::new(Vec3::new(0.0, 1.2, 0.0), color_f(0.2, 0.7, 0.8), 1.2),
+        //    Con la fuente de Ocarina el pedestal paso a ser un estrado con un
+        //    cuenco de agua a 0.84, y la luz a 1.2 quedaba a un palmo del
+        //    cuenco: el aro de oro y el agua recibian tanta luz que el bloom
+        //    se comia el centro del cuadro. A 2.1 alumbra el estrado entero.
+        Light::new(Vec3::new(0.0, 2.1, 0.0), color_f(0.3, 0.75, 0.85), 1.2),
         // 5. LA LUNA. Muy lejos, en la direccion en la que se la ve en el
         //    cielo, con alcance enorme para que llegue pareja a toda la
         //    escena: una luz fria y suave que viene de atras y por encima
@@ -3715,10 +3661,10 @@ fn main() {
         //    Eso no es solo estetica, es lo que las hace baratas: con el
         //    corte por aporte de `cast_ray`, un impacto lejos de ellas ni
         //    siquiera les tira el rayo de sombra.
-        Light::new(Vec3::new(-1.9, 0.98, 4.5), color_f(1.0, 0.6, 0.25), 2.4)
-            .con_alcance(2.0),
-        Light::new(Vec3::new(1.9, 0.98, 4.5), color_f(1.0, 0.6, 0.25), 2.4)
-            .con_alcance(2.0),
+        Light::new(Vec3::new(-fuente::ANTORCHA_X, fuente::LLAMA_Y + 0.2, fuente::ANTORCHA_Z), color_f(1.0, 0.6, 0.25), 1.3)
+            .con_alcance(1.6),
+        Light::new(Vec3::new(fuente::ANTORCHA_X, fuente::LLAMA_Y + 0.2, fuente::ANTORCHA_Z), color_f(1.0, 0.6, 0.25), 1.3)
+            .con_alcance(1.6),
     ];
 
     // Las luces se atenuan con la distancia (ver `Light::atenuacion`), y
@@ -3742,6 +3688,11 @@ fn main() {
     // NAVI, revoloteando alrededor de Link con su propia luz, y las notas
     // que salen de la ocarina. Va despues de las luces porque suma una.
     escena.registrar_navi(navi::armar(&mut objects, &mut lights, link::boca()));
+
+    // LA GRAN HADA: escondida hasta que entran las voces. Ver `hada_mayor.rs`.
+    escena.registrar_hada_mayor(hada_mayor::armar(&mut objects, &mut lights));
+    // EL FUEGO DE DIN, el poder que el hada le da a Link. Ver `fuego_de_din.rs`.
+    escena.registrar_fuego(fuego_de_din::armar(&mut objects, &mut lights));
 
     escena.registrar_isla(isla);
     escena.registrar_luces(&lights);
@@ -3980,6 +3931,80 @@ fn main() {
         };
         ritmo("estelas del arpa", salidas);
         ritmo("estrellas fugaces", fugaces);
+
+        // LOS MOMENTOS DE LA GRAN HADA, para ubicarlos en el tema.
+        let mut antes = analisis.get_scene_params(0.0);
+        let mut t = 1.0 / 30.0;
+        println!();
+        while t < analisis.duracion {
+            let p = analisis.get_scene_params(t);
+            if antes.hada < 0.06 && p.hada >= 0.06 {
+                println!("{t:7.1} s  la Gran Hada empieza a salir del agua");
+            }
+            if antes.bendicion < 0.5 && p.bendicion >= 0.5 {
+                println!("{t:7.1} s  bendice a Link");
+            }
+            if antes.hada > 0.35 && p.hada <= 0.35 {
+                println!("{t:7.1} s  se zambulle");
+            }
+            if (0.0..0.05).contains(&p.hechizo) && !(0.0..0.05).contains(&antes.hechizo) {
+                println!("{t:7.1} s  Link lanza el Fuego de Din");
+            }
+            antes = p;
+            t += 1.0 / 30.0;
+        }
+
+        // ¿LA ESCENA RESPONDE EN TODO MOMENTO? Por cuadro, la reaccion mas
+        // fuerte de la escena a la cancion: el golpe, el destello de un
+        // ataque del arpa, el haz de un cristal, las voces, la bendicion o el
+        // hechizo. Se informa que parte del tema queda por debajo de un
+        // umbral (la escena "quieta") y el hueco quieto mas largo.
+        const UMBRAL: f32 = 0.15;
+        let (mut quietos, mut total, mut hueco, mut peor) = (0usize, 0usize, 0.0f32, 0.0f32);
+        let mut donde_peor = 0.0f32;
+        let mut t = 0.0f32;
+        while t < analisis.duracion {
+            let p = analisis.get_scene_params(t);
+            let arpa = p
+                .ataques
+                .iter()
+                .filter_map(|&(_, t0)| {
+                    let e = p.tiempo - t0;
+                    (0.0..0.6).contains(&e).then(|| 1.0 - e / 0.6)
+                })
+                .fold(0.0f32, f32::max);
+            let cristal = p
+                .unos
+                .iter()
+                .filter_map(|&(_, t0, f)| {
+                    let e = p.tiempo - t0;
+                    (0.0..1.5).contains(&e).then(|| (1.0 - e / 1.5).powi(2) * f)
+                })
+                .fold(0.0f32, f32::max);
+            let hechizo = if (0.0..2.2).contains(&p.hechizo) { 1.0 } else { 0.0 };
+            let reaccion = [p.pulso, arpa, cristal, p.swell, p.bendicion, hechizo]
+                .into_iter()
+                .fold(0.0f32, f32::max);
+            total += 1;
+            if reaccion < UMBRAL {
+                quietos += 1;
+                hueco += 1.0 / 30.0;
+                if hueco > peor {
+                    peor = hueco;
+                    donde_peor = t;
+                }
+            } else {
+                if hueco > 1.5 {
+                    println!("   quieto {hueco:.1} s, hasta {t:.1} s");
+                }
+                hueco = 0.0;
+            }
+            t += 1.0 / 30.0;
+        }
+        println!(
+            "\nla escena reacciona a la cancion el {:.1}% del tiempo; hueco quieto mas largo: {peor:.2} s (termina en {donde_peor:.1} s)",
+            (1.0 - quietos as f32 / total.max(1) as f32) * 100.0
+        );
         return;
     }
 
@@ -4092,7 +4117,13 @@ fn main() {
             // El pendulo en el mismo instante de la cancion.
             let mut cam_orbita = Orbita::inicial();
             cam_orbita.avanzar(t, 0.0, 0.0, 0.0);
-            let cam = cam_orbita.camara_cine(&params);
+            let cam = std::env::var("CAMARA")
+                .ok()
+                .and_then(|s| {
+                    let v: Vec<f32> = s.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                    (v.len() == 6).then(|| mirar_a(Vec3::new(v[0], v[1], v[2]), Vec3::new(v[3], v[4], v[5])))
+                })
+                .unwrap_or_else(|| cam_orbita.camara_cine(&params));
             animacion::actualizar_escena(&mut objects, &mut lights, &escena, &params);
             (arbol, arbol_sombras) = arboles_de(&objects, &occluders);
             avanzar_noche(&mut cielo, &mut lights, &params);
@@ -4739,7 +4770,7 @@ mod tests {
     #[test]
     fn el_programa_pasa_por_sus_planos_y_cierra() {
         for p in &PROGRAMA[..PROGRAMA.len() - 1] {
-            let (r, ph, m, _) = plano_en(p.t);
+            let (r, ph, m, _, _) = plano_en(p.t);
             assert!((r - p.radio).abs() < 1e-3 && (ph - p.phi).abs() < 1e-3 && (m - p.mira_y).abs() < 1e-3);
         }
         let fin = PROGRAMA[PROGRAMA.len() - 1].t;
@@ -4777,10 +4808,10 @@ mod tests {
     fn las_teclas_se_suman_y_respetan_los_topes() {
         let mut o = Orbita::inicial();
         o.avanzar(0.0, 0.0, 10.0, 100.0);
-        let (r, ph, _, _) = o.encuadre(0.0);
+        let (r, ph, _, _, _) = o.encuadre(0.0);
         assert!(r <= Orbita::RADIO_MAX && ph <= Orbita::PHI_MAX);
         o.avanzar(0.0, 0.0, -20.0, -200.0);
-        let (r, ph, _, _) = o.encuadre(0.0);
+        let (r, ph, _, _, _) = o.encuadre(0.0);
         assert!(r >= Orbita::RADIO_MIN && ph >= Orbita::PHI_MIN);
     }
 }

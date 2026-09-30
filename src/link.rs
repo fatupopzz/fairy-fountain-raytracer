@@ -36,9 +36,10 @@ use std::any::Any;
 use std::f32::consts::PI;
 use std::sync::Arc;
 
-/// Donde estan los pies de Link: sobre el escalon de arriba de la entrada,
-/// corrido a la izquierda para no tapar la Trifuerza desde la camara.
-pub const PIES: Vec3 = Vec3::new(-0.95, 0.345, 3.55);
+/// Donde estan los pies de Link: en el pasillo de baldosas, justo detras de
+/// la Trifuerza del piso y de frente al estrado, que es donde se para en el
+/// juego para tocar la cancion.
+pub const PIES: Vec3 = Vec3::new(0.0, 0.345, 3.0);
 
 /// Hacia donde mira: a la Trifuerza del altar.
 pub fn guinada_base() -> f32 {
@@ -92,20 +93,20 @@ enum Frente {
 
 /// Un hueso: un origen y tres ejes, en el mundo.
 #[derive(Clone, Copy)]
-struct Hueso {
-    o: Vec3,
-    e: [Vec3; 3],
+pub(crate) struct Hueso {
+    pub(crate) o: Vec3,
+    pub(crate) e: [Vec3; 3],
 }
 
 impl Hueso {
-    fn hijo(&self, pivote: Vec3, rot: [Vec3; 3]) -> Hueso {
+    pub(crate) fn hijo(&self, pivote: Vec3, rot: [Vec3; 3]) -> Hueso {
         Hueso {
             o: self.punto(pivote),
             e: componer(&self.e, &rot),
         }
     }
 
-    fn punto(&self, p: Vec3) -> Vec3 {
+    pub(crate) fn punto(&self, p: Vec3) -> Vec3 {
         self.o + llevar(&self.e, &p)
     }
 
@@ -150,7 +151,7 @@ fn segmento(a: Vec3, b: Vec3, grueso: f32, ancho: f32, lado: Vec3, mat: M) -> Pi
 /// `s` a la mano `h`, con los dos tramos de largo `l1` y `l2`, doblado hacia
 /// `polo`. Si la mano quedo mas lejos de lo que el brazo alcanza, se estira
 /// derecho hacia ella.
-fn codo(s: Vec3, h: Vec3, l1: f32, l2: f32, polo: Vec3) -> Vec3 {
+pub(crate) fn codo(s: Vec3, h: Vec3, l1: f32, l2: f32, polo: Vec3) -> Vec3 {
     let d = h - s;
     let dist = d.norm().clamp(1e-3, l1 + l2 - 1e-3);
     let eje = d / d.norm().max(1e-4);
@@ -179,6 +180,18 @@ pub struct Pose {
     gorro_lado: f32,
     /// Fase del segundo, para el aleteo fino del gorro.
     tiempo: f32,
+    /// Cuanto esta recibiendo la bendicion del hada (0 a 1): guarda la
+    /// ocarina, levanta los dos brazos y mira hacia arriba.
+    recibe: f32,
+    /// Cuanto baja la cadera, en metros: las rodillas se doblan (con
+    /// cinematica inversa, como los brazos) y los pies quedan en el piso.
+    baja: f32,
+    /// Giro del torso sobre la cadera, en radianes.
+    gira: f32,
+    /// El Fuego de Din: `prepara` levanta los punos (0 a 1) y `azota` baja
+    /// el izquierdo contra el piso.
+    prepara: f32,
+    azota: f32,
 }
 
 impl Pose {
@@ -191,6 +204,11 @@ impl Pose {
             gorro_arriba: 0.0,
             gorro_lado: 0.0,
             tiempo: 0.0,
+            recibe: 0.0,
+            baja: 0.0,
+            gira: 0.0,
+            prepara: 0.0,
+            azota: 0.0,
         }
     }
 }
@@ -209,19 +227,46 @@ pub fn pose_de(p: &SceneParams) -> Pose {
     let fase = p.tiempo / (beat * 2.0) * 2.0 * PI;
     let energia = p.energia_suave.clamp(0.0, 1.0);
     let vaiven = 0.035 + 0.045 * energia + 0.03 * p.swell;
+
+    // EL FUEGO DE DIN, como en el juego: se agacha, levanta los punos y
+    // golpea el piso con el izquierdo en el instante en que la cupula se
+    // abre en el centro de la fuente (ver `fuego_de_din.rs`).
+    let e = p.hechizo;
+    let (prepara, azota) = if e >= 0.0 {
+        let suave = |x: f32| {
+            let x = x.clamp(0.0, 1.0);
+            x * x * (3.0 - 2.0 * x)
+        };
+        let se_levanta = 1.0 - suave((e - 2.4) / 0.7);
+        let golpe = crate::fuego_de_din::GOLPE;
+        (suave(e / 0.35) * se_levanta, suave((e - golpe + 0.1) / 0.1) * se_levanta)
+    } else {
+        (0.0, 0.0)
+    };
+    // Mientras el hada esta afuera (y antes de la bendicion) la mira.
+    let mira = p.hada.clamp(0.0, 1.0) * (1.0 - p.bendicion.clamp(0.0, 1.0)) * 0.22;
     Pose {
-        balanceo: fase.sin() * vaiven,
-        inclinacion: 0.06 + 0.05 * energia + 0.06 * p.swell,
-        asiente: p.pulso * 0.09 - 0.02,
+        balanceo: fase.sin() * vaiven * (1.0 - azota),
+        inclinacion: 0.06 + 0.05 * energia + 0.06 * p.swell + 0.45 * azota,
+        asiente: p.pulso * 0.09 - 0.02 - mira - 0.3 * prepara * (1.0 - azota) + 0.25 * azota,
         respira: (p.tiempo * 1.4).sin() * 0.008,
-        gorro_arriba: 0.10 * p.pulso + 0.05 * p.swell,
+        gorro_arriba: 0.10 * p.pulso + 0.05 * p.swell + 0.35 * azota,
         gorro_lado: -(fase - PI / 2.0).sin() * vaiven * 2.2,
         tiempo: p.tiempo,
+        recibe: p.bendicion.clamp(0.0, 1.0),
+        // Marca el tiempo con las rodillas, y se agacha para el hechizo.
+        baja: 0.03 * p.pulso + 0.015 * p.swell + 0.06 * prepara + 0.15 * azota,
+        // Y el torso acompana el vaiven, a contratiempo de la cadera.
+        gira: (fase * 0.5).sin() * (0.05 + 0.08 * energia) * (1.0 - prepara),
+        prepara,
+        azota,
     }
 }
 
 /// Los huesos que importan fuera de `piezas`.
 struct Esqueleto {
+    raiz: Hueso,
+    cuerpo: Hueso,
     torso: Hueso,
     cabeza: Hueso,
 }
@@ -232,15 +277,17 @@ impl Esqueleto {
             o: PIES,
             e: ejes_de(guinada_base(), 0.0, pose.balanceo),
         };
-        let torso = raiz.hijo(
+        // La cadera: baja cuando se doblan las rodillas y gira un poco.
+        let cuerpo = raiz.hijo(Vec3::new(0.0, -pose.baja, 0.0), ejes_de(-pose.gira * 0.4, 0.0, 0.0));
+        let torso = cuerpo.hijo(
             Vec3::new(0.0, 0.78 + pose.respira, 0.0),
-            ejes_de(0.0, pose.inclinacion, pose.balanceo * 0.6),
+            ejes_de(pose.gira, pose.inclinacion, pose.balanceo * 0.6),
         );
         let cabeza = torso.hijo(
             Vec3::new(0.0, 0.54, 0.0),
-            ejes_de(0.0, 0.10 + pose.asiente, -pose.balanceo * 1.2),
+            ejes_de(0.0, 0.10 + pose.asiente - 0.55 * pose.recibe, -pose.balanceo * 1.2),
         );
-        Esqueleto { torso, cabeza }
+        Esqueleto { raiz, cuerpo, torso, cabeza }
     }
 }
 
@@ -251,11 +298,7 @@ fn piezas(pose: &Pose) -> (Vec<Pieza>, Vec<usize>) {
     // Donde termina cada PARTE del cuerpo: cada una va en su propio grupo
     // acotado, asi que un rayo que pasa por la cabeza no prueba las botas.
     let mut cortes: Vec<usize> = Vec::new();
-    let raiz = Hueso {
-        o: PIES,
-        e: ejes_de(guinada_base(), 0.0, pose.balanceo),
-    };
-    let Esqueleto { torso, cabeza } = Esqueleto::de(pose);
+    let Esqueleto { raiz, cuerpo, torso, cabeza } = Esqueleto::de(pose);
 
     // ---- PIERNAS Y BOTAS ----
     // Las botas marrones con el borde doblado arriba, y las calzas
@@ -269,14 +312,21 @@ fn piezas(pose: &Pose) -> (Vec<Pieza>, Vec<usize>) {
             M::Cuero,
         ));
         v.push(raiz.recta(Vec3::new(x, 0.27, 0.0), Vec3::new(0.17, 0.05, 0.19), M::CueroOscuro));
-        v.push(raiz.recta(Vec3::new(x, 0.46, 0.0), Vec3::new(0.12, 0.36, 0.13), M::Blanco));
+        // Muslo y pierna, de la cadera al tobillo: la rodilla la resuelve
+        // `codo`, hacia adelante y apenas hacia afuera.
+        let cadera = cuerpo.punto(Vec3::new(x, 0.64, 0.0));
+        let tobillo = raiz.punto(Vec3::new(x, 0.29, 0.0));
+        let polo = raiz.e[2] + raiz.e[0] * lado * 0.3;
+        let rodilla = codo(cadera, tobillo, 0.18, 0.18, polo);
+        v.push(segmento(cadera, rodilla, 0.13, 0.125, raiz.e[0], M::Blanco));
+        v.push(segmento(rodilla, tobillo - raiz.e[1] * 0.02, 0.12, 0.115, raiz.e[0], M::Blanco));
     }
 
     // ---- FALDON DE LA TUNICA ----
     // Dos cajas: el cuerpo y el ruedo, un poco mas ancho, que es lo que le
     // da la forma acampanada.
-    v.push(raiz.recta(Vec3::new(0.0, 0.69, 0.0), Vec3::new(0.38, 0.24, 0.26), M::Tunica));
-    v.push(raiz.recta(Vec3::new(0.0, 0.59, 0.0), Vec3::new(0.43, 0.08, 0.30), M::Tunica));
+    v.push(cuerpo.recta(Vec3::new(0.0, 0.69, 0.0), Vec3::new(0.34, 0.24, 0.25), M::Tunica));
+    v.push(cuerpo.recta(Vec3::new(0.0, 0.59, 0.0), Vec3::new(0.41, 0.08, 0.29), M::Tunica));
 
     cortes.push(v.len());
     // ---- TORSO ----
@@ -381,9 +431,11 @@ fn piezas(pose: &Pose) -> (Vec<Pieza>, Vec<usize>) {
     // Azul, en la boca, cruzada. Cuelga de la cabeza: si Link asiente, la
     // ocarina asiente con el.
     let ocarina = cabeza.hijo(OCARINA_EN_CABEZA, ejes_de(0.0, 0.25, 0.0));
-    v.push(ocarina.recta(Vec3::zeros(), Vec3::new(0.16, 0.065, 0.075), M::Ocarina));
-    v.push(ocarina.recta(Vec3::new(0.0, 0.0, -0.05), Vec3::new(0.035, 0.03, 0.05), M::Ocarina));
-    v.push(ocarina.recta(Vec3::new(0.0, 0.034, 0.0), Vec3::new(0.10, 0.01, 0.05), M::Oro));
+    // Para recibir la bendicion la guarda: se achica hasta desaparecer.
+    let guardada = 1.0 - (pose.recibe.max(pose.prepara) * 2.0).clamp(0.0, 1.0);
+    v.push(ocarina.recta(Vec3::zeros(), Vec3::new(0.16, 0.065, 0.075) * guardada, M::Ocarina));
+    v.push(ocarina.recta(Vec3::new(0.0, 0.0, -0.05), Vec3::new(0.035, 0.03, 0.05) * guardada, M::Ocarina));
+    v.push(ocarina.recta(Vec3::new(0.0, 0.034, 0.0), Vec3::new(0.10, 0.01, 0.05) * guardada, M::Oro));
 
     // ---- BRAZOS ----
     // Los hombros estan en el torso; las manos, en los extremos de la
@@ -392,7 +444,17 @@ fn piezas(pose: &Pose) -> (Vec<Pieza>, Vec<usize>) {
     let adelante = torso.e[2];
     for lado in [-1.0f32, 1.0] {
         let hombro = torso.punto(Vec3::new(lado * 0.215, 0.43, 0.0));
-        let mano = ocarina.punto(Vec3::new(lado * 0.085, -0.02, 0.0));
+        // Tocando, las manos van a los extremos de la ocarina; recibiendo la
+        // bendicion, arriba de la cabeza, abiertas hacia el hada.
+        let en_ocarina = ocarina.punto(Vec3::new(lado * 0.085, -0.02, 0.0));
+        let arriba = torso.punto(Vec3::new(lado * 0.2, 0.88, 0.10));
+        let mano = en_ocarina + (arriba - en_ocarina) * pose.recibe;
+        // El Fuego de Din: los dos punos arriba, y el izquierdo (+X, Link
+        // es zurdo) baja de golpe al piso, delante de los pies.
+        let puno = torso.punto(Vec3::new(lado * 0.17, 0.92, 0.14));
+        let mano = mano + (puno - mano) * pose.prepara;
+        let suelo = raiz.punto(Vec3::new(0.13, 0.07, 0.30));
+        let mano = if lado > 0.0 { mano + (suelo - mano) * pose.azota } else { mano };
         let polo = torso.e[0] * lado * 0.8 - torso.e[1] * 1.3 + adelante * 0.25;
         let (l1, l2) = (0.23, 0.22);
         let c = codo(hombro, mano, l1, l2, polo);
@@ -761,6 +823,7 @@ impl LinkVivo {
                 let Some(pieza) = nuevas.get(i) else { break };
                 if let Some(caja) = (hijo.as_mut() as &mut dyn Any).downcast_mut::<CajaOrientada>() {
                     caja.colocar(pieza.centro, pieza.ejes);
+                    caja.medio = pieza.tam * 0.5;
                     if i == self.ocarina {
                         // La ocarina se enciende con lo que suena.
                         let k = nota.clamp(0.0, 1.0);

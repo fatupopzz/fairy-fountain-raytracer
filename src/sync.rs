@@ -53,6 +53,9 @@ pub const ESTELAS_VENTANA: f32 = 3.0;
 /// agua: los que duran mas que esto ya llegaron al borde de la piscina.
 pub const ONDAS_VENTANA: f32 = 2.2;
 
+/// A que frecuencia se muestrea la presencia del hada al cargar.
+const HADA_HZ: f32 = 10.0;
+
 /// Lo mismo para las estrellas fugaces, que viven `ESTRELLA_VIDA` (1.9 s).
 pub const ESTRELLAS_VENTANA: f32 = 3.5;
 
@@ -232,6 +235,16 @@ pub struct SyncData {
     /// de una cuerda pulsada: entra de golpe y se apaga sola en un
     /// segundo largo, que es lo que hace un arpa.
     chroma_suave: Vec<[f32; 12]>,
+    /// La presencia de la Gran Hada muestreada a 10 Hz al cargar (ver
+    /// `preparar_hada`), y los momentos en que sale del agua, en que queda
+    /// afuera del todo y en que se zambulle.
+    hada: Vec<f32>,
+    hada_salidas: Vec<f32>,
+    hada_plenas: Vec<f32>,
+    hada_zambullidas: Vec<f32>,
+    /// Cuando Link lanza el Fuego de Din: el primer uno de compas despues
+    /// de que el hada se zambulle.
+    hechizos: Vec<f32>,
 }
 
 /// Las cuatro bandas del analisis, ya suavizadas.
@@ -659,6 +672,11 @@ impl SyncData {
             cuerpo: Envolventes::default(),
             chroma: Vec::new(),
             chroma_suave: Vec::new(),
+            hada: Vec::new(),
+            hada_salidas: Vec::new(),
+            hada_plenas: Vec::new(),
+            hada_zambullidas: Vec::new(),
+            hechizos: Vec::new(),
             chroma_lento: Vec::new(),
             regiones: [[0, 1], [2, 3], [4, 5], [6, 7]],
         }
@@ -839,6 +857,163 @@ impl SyncData {
                 (beat, acento * (0.25 + energia * 1.6).min(1.2))
             })
             .collect()
+    }
+
+    /// CUANTO SALIO LA GRAN HADA, de 0 a 1.
+    ///
+    /// Sale con las voces, igual que la aurora y la columna de luz, pero no
+    /// puede seguir al swell tal cual: el swell baja y sube dentro del mismo
+    /// climax (en el 128 vale un tercio y en el 132 uno), y el hada entraria
+    /// y saldria del agua a cada respiro. Por eso se usa el PROMEDIO del
+    /// swell en los ultimos cuatro segundos, que hace la subida lenta (tarda
+    /// eso en salir del agua), y encima el MAXIMO de ese promedio en los
+    /// ultimos cinco, que la sostiene arriba mientras el climax siga y la
+    /// deja irse recien cuando se termino de verdad. Es funcion de `t` y nada
+    /// mas, como todo lo demas.
+    fn hada_calculada(&self, t: f32) -> f32 {
+        let promedio = |tau: f32| {
+            (0..8).map(|k| self.swell((tau - k as f32 * 0.5).max(0.0))).sum::<f32>() / 8.0
+        };
+        let sostenido = (0..=10).map(|k| promedio(t - k as f32 * 0.5)).fold(0.0f32, f32::max);
+        // El piso en 0.25 y no mas abajo: con 0.12, un sostenido corto del
+        // arpa a los dieciocho segundos la hacia asomarse del agua a medias
+        // y volver a hundirse, lejos de todo climax.
+        suave((sostenido - 0.25) / 0.42)
+    }
+
+    /// Los UNOS de los compases de los ultimos `ventana` segundos: el numero
+    /// de compas, cuando cayo y con que fuerza (la energia del tema en ese
+    /// momento, medida en el beat, asi no cambia mientras dura).
+    fn unos_hasta(&self, t: f32, ventana: f32) -> Vec<(usize, f32, f32)> {
+        let desde = self.beats.partition_point(|&b| b < t - ventana);
+        let hasta = self.beats.partition_point(|&b| b <= t);
+        (desde..hasta)
+            .filter(|i| i % 4 == 0)
+            .map(|i| {
+                let beat = self.beats[i];
+                (i / 4, beat, (0.35 + self.energia_suave(beat, 1.5) * 1.6).min(1.2))
+            })
+            .collect()
+    }
+
+    /// La presencia del hada en `t`: de la tabla si esta armada (lo normal),
+    /// y si no, calculada en el momento.
+    fn hada_mayor(&self, t: f32) -> f32 {
+        if self.hada.is_empty() {
+            return self.hada_calculada(t);
+        }
+        let x = (t.max(0.0) * HADA_HZ).min((self.hada.len() - 1) as f32);
+        let i = x.floor() as usize;
+        let j = (i + 1).min(self.hada.len() - 1);
+        self.hada[i] + (self.hada[j] - self.hada[i]) * (x - i as f32)
+    }
+
+    /// Muestrea la presencia del hada a lo largo de todo el tema y anota sus
+    /// tres momentos: cuando empieza a salir del agua, cuando queda afuera
+    /// del todo y cuando se zambulle. Calcularla cuesta un centenar de
+    /// evaluaciones del swell; hecha una vez al cargar, en cada cuadro es una
+    /// interpolacion.
+    fn preparar_hada(&mut self) {
+        // LOS EPISODIOS DEL HADA. El swell sube y baja adentro del mismo
+        // climax (a los 125 s cae un segundo y vuelve), y siguiendolo aunque
+        // sea suavizado el hada salia, se zambullia y volvia a salir. Lo que
+        // se busca en cambio son TRAMOS: donde el promedio de las voces en
+        // los ultimos cuatro segundos pasa de 0.3, uniendo los cortes de
+        // menos de seis segundos y tirando lo que dure menos de ocho (un
+        // sostenido suelto del arpa a los dieciocho segundos no es un
+        // climax). Cada tramo es UNA salida, UNA estancia y UNA zambullida.
+        let n = (self.duracion * HADA_HZ) as usize + 2;
+        let activo: Vec<bool> = (0..n)
+            .map(|i| {
+                let t = i as f32 / HADA_HZ;
+                (0..8).map(|k| self.swell((t - k as f32 * 0.5).max(0.0))).sum::<f32>() / 8.0 > 0.3
+            })
+            .collect();
+        let mut tramos: Vec<(f32, f32)> = Vec::new();
+        let mut i = 0;
+        while i < n {
+            if !activo[i] {
+                i += 1;
+                continue;
+            }
+            let desde = i;
+            while i < n && activo[i] {
+                i += 1;
+            }
+            let (t0, t1) = (desde as f32 / HADA_HZ, i as f32 / HADA_HZ);
+            match tramos.last_mut() {
+                Some(ultimo) if t0 - ultimo.1 < 6.0 => ultimo.1 = t1,
+                _ => tramos.push((t0, t1)),
+            }
+        }
+        tramos.retain(|(t0, t1)| t1 - t0 >= 8.0);
+
+        // Sale en cinco segundos, se queda, y se va en cuatro despues del
+        // final del tramo.
+        const SALE: f32 = 5.0;
+        const SE_VA: f32 = 4.0;
+        self.hada = (0..n)
+            .map(|i| {
+                let t = i as f32 / HADA_HZ;
+                tramos
+                    .iter()
+                    .map(|&(t0, t1)| suave((t - t0) / SALE) * (1.0 - suave((t - t1) / SE_VA)))
+                    .fold(0.0f32, f32::max)
+            })
+            .collect();
+        for &(t0, t1) in &tramos {
+            self.hada_salidas.push(t0);
+            self.hada_plenas.push(t0 + SALE);
+            // La zambullida es cuando cruza hacia abajo el tercio de su
+            // presencia: a mitad de la bajada.
+            self.hada_zambullidas.push(t1 + SE_VA * 0.6);
+        }
+        // EL FUEGO DE DIN, en el primer tiempo fuerte despues de la
+        // zambullida: el hada le dio el poder y Link lo estrena.
+        for &z in &self.hada_zambullidas {
+            if let Some(i) = (0..self.beats.len()).find(|&i| i % 4 == 0 && self.beats[i] > z + 0.3) {
+                self.hechizos.push(self.beats[i]);
+            }
+        }
+    }
+
+    /// Hace cuanto paso el ultimo de `momentos` antes de `t`, o `-1` si no
+    /// paso ninguno en los ultimos `ventana` segundos.
+    fn desde_el_ultimo(momentos: &[f32], t: f32, ventana: f32) -> f32 {
+        momentos
+            .iter()
+            .rev()
+            .find(|&&m| m <= t)
+            .map(|&m| t - m)
+            .filter(|&d| d <= ventana)
+            .unwrap_or(-1.0)
+    }
+
+    /// CUANTO ESTA BENDICIENDO A LINK, de 0 a 1: el momento cumbre de la
+    /// escena, como en el juego, cuando el hada abre los brazos sobre Link y
+    /// le da el poder. Empieza cuatro segundos despues de que el hada quedo
+    /// afuera del todo (antes se luce recostada) y dura mientras siga afuera.
+    fn bendicion(&self, t: f32, hada: f32) -> f32 {
+        let desde = Self::desde_el_ultimo(&self.hada_plenas, t, 60.0);
+        if desde < 0.0 {
+            return 0.0;
+        }
+        suave((desde - 4.0) / 2.0) * suave((hada - 0.9) / 0.1)
+    }
+
+    /// EL ACENTO DE SECCION, de 0 a 1: un empujon que arranca cuando empieza
+    /// una seccion nueva del tema y se apaga en tres segundos. La camara lo
+    /// usa para acercarse un paso en cada cambio de seccion, asi la
+    /// estructura de la cancion se ve en el encuadre y no solo en las luces.
+    fn acento_seccion(&self, t: f32) -> f32 {
+        let Some(s) = self.secciones.iter().rev().find(|s| s.t <= t && s.t > 1.0) else {
+            return 0.0;
+        };
+        let edad = t - s.t;
+        if edad > 6.0 {
+            return 0.0;
+        }
+        (1.0 - (-edad / 0.35).exp()) * (-edad / 2.2).exp()
     }
 
     /// HACE CUANTO QUE NO PEGA EL ARPA, en segundos, mirando como mucho
@@ -1299,10 +1474,17 @@ impl SyncData {
             // recorrido total queda parecido pero el movimiento POR GOLPE
             // pasa de 0.27 a 0.46, y la media baja de 1.36 a 1.13, que de
             // paso es parte de por que el climax ya no se inunda.
-            bloom_strength: (0.42 + c.bass * 0.80 + g.bass * 0.20 + pulso * 0.80
+            //
+            // CON TOPE en 1.05. La fuente de Ocarina trajo superficies claras
+            // al centro del cuadro (el pasillo y los paneles rosas, el agua
+            // verde, que pesa en la luminancia el doble que la cyan), y
+            // sobre el coro, donde el bajo empuja esto hasta 1.56, el halo
+            // se comia la fuente entera.
+            bloom_strength: ((0.42 + c.bass * 0.80 + g.bass * 0.20 + pulso * 0.80
                 + hacia_uno * 0.18
                 + self.cine(t) * 0.28)
-                * (0.40 + 0.60 * noche),
+                * (0.40 + 0.60 * noche))
+                .min(1.05),
             // No esta en el guion. Se ata al bass igual que la fuerza del
             // bloom porque las dos describen el mismo halo: si el brillo
             // crece y el radio no, el bloom se ve como un recorte duro.
@@ -1335,7 +1517,13 @@ impl SyncData {
             // hadas y el oro, que es lo que tiene que florecer. Medido en
             // el segundo 142, el cuadro pasa de ilegible a leerse entero
             // sin perder nada del resplandor.
-            bloom_threshold: 0.48 + dia * 0.24,
+            //
+            // Subido de 0.48 a 0.60 con la fuente de Ocarina: medido sobre el
+            // cuadro crudo del segundo 104, con 0.48 quedaba por encima el
+            // 39% de la imagen (el marmol iluminado, el pasillo, los
+            // paneles). Con 0.60 florece lo que brilla por su cuenta —las
+            // hadas, la Trifuerza, las chispas, los anillos— y no la piedra.
+            bloom_threshold: 0.60 + dia * 0.20,
             // La niebla del ALBA es mas espesa: la bruma de la manana es
             // una cosa real, se levanta con el sol y se disipa despues, y
             // aca ademas hace falta por una razon de composicion. Al
@@ -1458,7 +1646,24 @@ impl SyncData {
             ataques: self.ataques_hasta(t, ATAQUES_VENTANA),
             estelas: self.estelas_hasta(t, ESTELAS_VENTANA),
             estrellas: self.estrellas_hasta(t, ESTRELLAS_VENTANA),
-            ondas: self.golpes_hasta(t, ONDAS_VENTANA),
+            ondas: {
+                // Los golpes, y ademas un anillo enorme cuando el hada sale
+                // del agua y otro cuando se zambulle: la salpicadura.
+                let mut ondas = self.golpes_hasta(t, ONDAS_VENTANA);
+                for m in self.hada_salidas.iter().chain(&self.hada_zambullidas) {
+                    if (0.0..ONDAS_VENTANA).contains(&(t - m)) {
+                        ondas.push((*m, 2.2));
+                    }
+                }
+                ondas
+            },
+            unos: self.unos_hasta(t, 2.0),
+            hada: self.hada_mayor(t),
+            hada_salio: Self::desde_el_ultimo(&self.hada_salidas, t, 4.0),
+            hada_entro: Self::desde_el_ultimo(&self.hada_zambullidas, t, 4.0),
+            bendicion: self.bendicion(t, self.hada_mayor(t)),
+            hechizo: Self::desde_el_ultimo(&self.hechizos, t, 4.0),
+            acento_seccion: self.acento_seccion(t),
             swell,
             laser_emissions,
             camera_target_y: self.mira_y_suave(t),
@@ -1626,6 +1831,22 @@ pub struct SceneParams {
     /// Los golpes recientes como (segundo, fuerza): de cada uno sale un
     /// anillo de luz en el agua. Ver `SyncData::golpes_hasta`.
     pub ondas: Vec<(f32, f32)>,
+    /// Cuanto salio la Gran Hada de la fuente, de 0 (no esta) a 1 (flotando
+    /// afuera del todo). Ver `SyncData::hada_mayor`.
+    /// Los primeros tiempos de compas recientes, como (numero de compas,
+    /// segundo, fuerza). Los cristales disparan su haz de a uno por compas.
+    pub unos: Vec<(usize, f32, f32)>,
+    pub hada: f32,
+    /// Hace cuantos segundos empezo a salir del agua, o -1 (ventana de 4 s).
+    pub hada_salio: f32,
+    /// Hace cuantos segundos se zambullo, o -1 (ventana de 4 s).
+    pub hada_entro: f32,
+    /// Cuanto esta bendiciendo a Link, de 0 a 1. Ver `SyncData::bendicion`.
+    pub bendicion: f32,
+    /// Hace cuantos segundos Link lanzo el Fuego de Din, o -1.
+    pub hechizo: f32,
+    /// El empujon de camara de cada cambio de seccion, de 0 a 1.
+    pub acento_seccion: f32,
     /// EL "AAAAA", de 0 a 1: cuanto esta la cancion sostenida en vez de
     /// tocada. Es lo que enciende la aurora del cielo. Ver
     /// `SyncData::swell`.
@@ -1888,6 +2109,11 @@ fn parsear(texto: &str) -> Resultado<SyncData> {
         cuerpo: Envolventes::default(),
         chroma: Vec::new(),
         chroma_suave: Vec::new(),
+        hada: Vec::new(),
+        hada_salidas: Vec::new(),
+        hada_plenas: Vec::new(),
+        hada_zambullidas: Vec::new(),
+        hechizos: Vec::new(),
         chroma_lento: Vec::new(),
         regiones: [[0, 1], [2, 3], [4, 5], [6, 7]],
     };
@@ -2020,6 +2246,7 @@ fn parsear(texto: &str) -> Resultado<SyncData> {
     // un recorrido por los 5500 cuadros del tema, una sola vez.
     datos.preparar_envolventes();
     datos.repartir_regiones();
+    datos.preparar_hada();
 
     Ok(datos)
 }
@@ -2264,6 +2491,11 @@ mod tests_envolvente {
             cuerpo: Envolventes::default(),
             chroma: Vec::new(),
             chroma_suave: Vec::new(),
+            hada: Vec::new(),
+            hada_salidas: Vec::new(),
+            hada_plenas: Vec::new(),
+            hada_zambullidas: Vec::new(),
+            hechizos: Vec::new(),
             chroma_lento: Vec::new(),
             regiones: [[0, 1], [2, 3], [4, 5], [6, 7]],
         };

@@ -1,12 +1,20 @@
 # Great Fairy Fountain — un diorama trazado con rayos
 
 Un trazador de rayos en tiempo real, escrito desde cero en Rust, que dibuja la
-fuente del Hada Mayor de *Ocarina of Time* sobre una **isla flotante** y la
-anima con el **Great Fairy's Fountain Theme**. En el escalón de la entrada,
-**Link** —hecho de cubos— toca la Ocarina del Tiempo mientras **Navi** le da
-vueltas a la cabeza; de la ocarina salen notas con cada nota del arpa, el agua
-late con cada tiempo, y cuando entran las voces una columna de luz sube de la
-Trifuerza al cielo bajo una **aurora boreal**.
+Gran Fuente de las Hadas de *Ocarina of Time* sobre una **isla flotante** y la
+anima con el **Great Fairy's Fountain Theme**. Como en el juego: todo de
+baldosa blanca celeste, una **piscina hexagonal**, la **Trifuerza incrustada en
+el piso** donde Link se para a tocar, un estrado en terrazas con el cuenco del
+hada dentro de una flor de loto, dos **antorchas de cono** con fuego naranja, y
+una **lluvia de brillos** cayendo alrededor de la fuente.
+
+Parado sobre la Trifuerza, **Link** —hecho de cubos— toca la Ocarina del
+Tiempo mientras **Navi** le da vueltas a la cabeza. Cuando entran las voces, la
+**Gran Hada** sale del cuenco dando una voltereta entre halos de luz, baila en
+el aire, **bendice a Link** con un rayo dorado mientras él levanta los brazos
+para recibir el poder, se zambulle, y en el golpe siguiente Link estrena el
+**Fuego de Din**. Todo bajo una **aurora boreal** que se retuerce, pulsa y
+cambia de color con la canción.
 
 No hay motor 3D: la geometría, la iluminación, las sombras, los reflejos, el
 modelo de Link y el cielo son código propio. Lo único que aporta raylib es la
@@ -78,12 +86,12 @@ segundos mide `--bench`, y `CAMARA=x,y,z,mx,my,mz` fija la cámara en `--foto`.
 
 | | |
 |---|---|
-| **Escena compleja** | Isla flotante de bloques con cascadas, cristales colgantes e islotes; la fuente con piscina, seis columnas, techo, altar y Trifuerza; tres anillos toroidales en precesión; Link articulado de ~50 cubos; Navi; notas; ~80 hadas y motas; rupias; antorchas; skybox con aurora y mar de nubes. 126 objetos, 10 luces de color. |
+| **Escena compleja** | Isla flotante de bloques con cascadas, cristales colgantes e islotes; la fuente de Ocarina con piscina hexagonal, pasillo, Trifuerza en el piso, estrado hexagonal en terrazas, flor de loto, antorchas de cono, seis columnas y techo; tres halos toroidales; Link articulado de ~50 cubos con cinemática inversa; la Gran Hada articulada; Navi; notas; haces de cristal; el rayo de la bendición; el Fuego de Din; lluvia de 150 brillos; ~50 hadas y motas; rupias; skybox con aurora y mar de nubes. 262 objetos, 12 luces de color. |
 | **Rotación y zoom** | La cámara orbita 360° alrededor de la isla (una vuelta cada 96 s) y se acerca y aleja con el programa de planos; teclado y ratón suman giro, altura y distancia. |
 | **Materiales** (cada uno con su textura y sus pesos de albedo, especular, reflexión y transparencia) | Ver la tabla de abajo: son más de diez. |
 | **Refracción** | El agua de la piscina y de las cascadas (1.33), los cristales (1.5), las rupias (1.6). Con Fresnel: el agua es espejo mirada de costado y transparente mirada de frente. |
-| **Reflexión** | El agua, el mármol pulido de la plaza, la obsidiana del altar, el oro, la ocarina esmaltada, el escudo. Con reflejos rugosos donde el material no es espejo. |
-| **Skybox** | Equirectangular generado por código al arrancar: estrellas que titilan, nebulosa, luna, y encima, calculado por rayo, la aurora, el mar de nubes, las estrellas fugaces y el amanecer. |
+| **Reflexión** | El agua, el mármol pulido de la plaza, la obsidiana del cuenco, el oro, las baldosas, la ocarina esmaltada, el escudo. Con reflejos rugosos donde el material no es espejo. |
+| **Skybox** | Equirectangular generado por código al arrancar: estrellas que titilan, nebulosa, luna, y encima, calculado por rayo, la aurora (con olas, color y corona que siguen a la música), el mar de nubes, las estrellas fugaces y el amanecer. |
 
 ### Los materiales
 
@@ -93,9 +101,11 @@ Los cuatro pesos del albedo son `[difuso, especular, reflexión, transparencia]`
 |---|---|---|---|---|
 | Mármol de hada (bordes, columnas, techo) | `fairy_marble.png` + relieve | `[1.0, 0.22, 0.10, 0.0]` | 18 | — |
 | Mármol pulido (plaza) | `fairy_marble.png` + relieve | `[0.9, 0.6, 0.30, 0.0]` | 80 | — |
-| Agua | `water_fairy.png`, desplazándose | `[0.25, 0.3, 0.5, 0.6]` | 120 | 1.33 |
+| Agua (celeste, como en Ocarina) | `water_fairy.png`, desplazándose | `[0.25, 0.3, 0.5, 0.6]` | 120 | 1.33 |
 | Oro (molduras) | `gold_triforce.png` + relieve | `[1.0, 0.95, 0.35, 0.0]` | 95 | — |
-| Obsidiana (altar) | `obsidian.png` + relieve | `[1.0, 0.7, 0.6, 0.0]` | 200 | — |
+| Obsidiana (fondo del cuenco) | `obsidian.png` + relieve | `[1.0, 0.7, 0.6, 0.0]` | 200 | — |
+| Baldosa blanca (pasillo, bordes, estrado, antorchas) | pintada por código | `[0.55, 0.30, 0.12, 0.0]` | 50 | — |
+| Pétalo de loto | pintado por código | `[1.0, 0.45, 0.10, 0.0]` | 50 | — |
 | Cristal | `crystal.png` | `[0.35, 0.9, 0.25, 0.7]` | 120 | 1.5 |
 | Piedra de la isla | `stone_cave.png` + relieve | `[1.0, 0.05, 0.0, 0.0]` | 6 | — |
 | Pasto | pintada por código | `[1.0, 0.06, 0.0, 0.0]` | 10 | — |
@@ -105,6 +115,7 @@ Los cuatro pesos del albedo son `[difuso, especular, reflexión, transparencia]`
 | Túnica de Link | tela pintada por código | `[1.0, 0.08, 0.0, 0.0]` | 12 | — |
 | Escudo hyliano | pintado por código | `[1.0, 0.7, 0.25, 0.0]` | 60 | — |
 | Ocarina del Tiempo | esmalte azul | `[0.7, 1.0, 0.35, 0.0]` | 140 | — |
+| Traje de la Gran Hada | hojas pintadas por código | `[1.0, 0.15, 0.0, 0.0]` | 18 | — |
 
 ---
 
@@ -123,6 +134,27 @@ Minecraft. De dos bordes caen cascadas de agua de verdad (refractan, y su
 textura corre hacia abajo en cada cuadro), de la panza cuelgan puntas de
 cristal encendido y alrededor flotan islotes más chicos que dan escala.
 
+### La fuente de Ocarina
+
+En el juego todas las fuentes son iguales: dos antorchas, el estanque al fondo y
+la Trifuerza tallada en el piso delante; ahí se para Link, toca la canción de
+Zelda y el hada sale en una cascada de luz, entre risas. La de acá
+(`src/fuente.rs`) sigue a la de la versión de N64: todo de **baldosa de mármol
+blanco celeste**, una **piscina hexagonal** de agua celeste con las seis
+columnas naciendo de sus esquinas, un pasillo que entra hasta la **plataforma
+cuadrada de la Trifuerza** (de oro, incrustada en el piso dentro de su marco, y
+late con cada golpe), un **estrado hexagonal en terrazas** con filetes de oro,
+y a los costados de Link las **dos antorchas de cono invertido** con su fuego
+naranja. El cuenco del hada nace de una **flor de loto** (como en las fuentes
+de estilo egipcio de la versión de 3DS), y alrededor del estrado cae una
+**lluvia de brillos**: ciento cincuenta gotas de luz con su estela que
+titilan, más encendidas cuanto más toca el arpa.
+
+Los hexágonos salen de cubos sin un triángulo: tres cajas iguales, de ancho la
+distancia entre lados opuestos y de largo el lado, giradas 60 grados entre sí,
+se superponen exactamente en el hexágono. El agua usa un límite hexagonal
+propio (`Limite::Hexagono`).
+
 ### Link
 
 ![Link tocando la ocarina](docs/link.jpg)
@@ -135,17 +167,69 @@ guanteletes, botas, el escudo hyliano y la Espada Maestra cruzados en la
 espalda, y la Ocarina del Tiempo en la boca. La cara, la tela, el cuero y el
 escudo son texturas pintadas píxel por píxel por código al arrancar.
 
-Tiene **esqueleto**: raíz en los pies, torso, cabeza y un gorro que es una
-cadena de cinco eslabones colgando de la coronilla, así que girar el torso
-arrastra todo lo que cuelga de él. Los brazos se resuelven con **cinemática
-inversa de dos huesos** para que las manos queden siempre sobre la ocarina. La
-pose sale de la canción en cada cuadro: se mece a la mitad del compás, asiente
-en cada tiempo, respira, y el gorro llega tarde a cada movimiento, como tela.
+Tiene **esqueleto**: raíz en los pies, cadera, torso, cabeza y un gorro que es
+una cadena de cinco eslabones colgando de la coronilla, así que girar el torso
+arrastra todo lo que cuelga de él. Brazos y piernas se resuelven con
+**cinemática inversa de dos huesos**: las manos quedan siempre sobre la ocarina
+y los pies siempre en el piso, aunque la cadera baje. La pose sale de la canción
+en cada cuadro: se mece a la mitad del compás, marca cada tiempo doblando las
+rodillas, gira el torso a contratiempo de la cadera, asiente, respira, levanta
+la vista hacia el hada mientras está afuera, y el gorro llega tarde a cada
+movimiento, como tela.
+Cuando el hada lo bendice, **guarda la ocarina, levanta los dos brazos y mira
+hacia arriba** para recibir el poder, como en la cinemática.
 
 **Navi** revolotea alrededor de su cabeza con una luz propia que se mueve sobre
 la túnica y el escudo, y cada ataque del arpa suelta una **nota** de la ocarina
 que sube en espiral hacia la fuente, con los colores de los botones A (azul) y
 C (amarillo) del juego.
+
+### La Gran Hada
+
+En el juego, cuando Link toca la canción frente a la fuente, el Hada Mayor sale
+del agua girando entre risas, le da un poder y se va. Acá pasa en el clímax, en
+cuatro tiempos (`src/hada_mayor.rs`):
+
+1. **Sale del cuenco dando una voltereta** mientras gira, chica, dentro de la
+   columna de luz, con un estallido de chispas y un anillo enorme en el agua;
+   crece mientras sube y queda flotando derecha sobre el estrado.
+2. **Baila con la música**: cambia de pose en cada compás (una mano detrás de
+   la cabeza, las dos arriba, una tendida hacia Link, los brazos abiertos), y
+   además las manos nunca se quedan quietas (gesticula al ritmo), patalea
+   alternando las piernas, se mece, sube en cada golpe, y en los golpes fuertes
+   echa la cabeza hacia atrás y le tiemblan los hombros —su risa—, con las
+   coletas abiertas como llamas avivadas.
+3. **Bendice a Link**: abre los brazos en cruz y avanza por encima de él; de
+   sus manos baja un **rayo dorado** y una lluvia de chispas sobre Link, que
+   guarda la ocarina y levanta los brazos bajo una luz dorada.
+4. **Se zambulle** girando en el cuenco, con una salpicadura de chispas, y en el
+   primer tiempo fuerte siguiente Link lanza el **Fuego de Din**
+   (`src/fuego_de_din.rs`), como en el juego: sobre el cuenco aparece el
+   cristal en rombo girando, Link se agacha (las rodillas se doblan con
+   cinemática inversa), levanta los puños y golpea el piso; en ese instante
+   el rombo cae al cuenco y desde el centro de la fuente se abre una cúpula
+   de luz pastel —durazno por fuera, rosa por dentro, casi transparente— que
+   crece hasta envolver a Link y se deshace en dos ondas de chispas.
+
+Está hecha igual que Link, con cubos orientados colgados de huesos: el pelo
+magenta en dos coletas de cinco eslabones que se aclaran hacia la punta como
+una llama, el moño, el traje de hojas en capas (una textura con hojas en gota
+superpuestas como tejas, cada una con su nervadura), el paño rosa de los
+brazos, las botas de enredadera marrón y la cara maquillada con rubor y
+sonrisa. La piel brilla apenas: es un ser de luz. El
+cuerpo se arma de pie en su propio sistema y se lleva al mundo con una escala y
+una rotación, así que el mismo modelo sirve para la figura chica que sale del
+agua y para la grande que bendice.
+
+Cuándo pasa lo decide el análisis: se buscan los **tramos** donde las voces se
+sostienen (el promedio del swell en cuatro segundos pasa de 0.3), uniendo cortes
+de menos de seis segundos y descartando los de menos de ocho. Cada tramo es una
+sola salida, una bendición y una zambullida; siguiendo el swell directamente,
+el hada entraba y salía del agua con cada respiro de las voces.
+
+Mientras el hada está afuera, los **tres halos toroidales** —que el resto del
+tema flotan horizontales sobre el cuenco como un círculo de invocación— suben por
+la columna de luz y la rodean a la altura de los pies, la cintura y el pecho.
 
 ### El arco: empieza al amanecer y termina de noche
 
@@ -160,21 +244,34 @@ noche.
 
 ### El golpe
 
-![El clímax: la columna de luz y la aurora](docs/golpe.jpg)
+![Los anillos del golpe y el Fuego de Din](docs/golpe.jpg)
 
 - **Anillos de luz en el agua**: en cada tiempo sale del pie del altar un
   anillo rosa que se abre hasta el borde de la piscina, iluminado y levantando
   el agua a su paso (una loma gaussiana que tuerce el reflejo). El uno del
   compás pega entero y los otros tres a un tercio, y la fuerza sigue a la
   energía del tema: un susurro en la intro, olas de luz en el coro.
-- **La columna de luz**: cuando las voces se sostienen (el clímax), sube de la
-  punta de la Trifuerza al cielo una columna con núcleo blanco y halo rosa
-  translúcido, como cuando aparece el Hada Mayor, y late con el golpe.
-- **La aurora boreal** vive toda la noche, tenue, y las voces la llevan a
-  pleno; cada tiempo fuerte le da un latido. Son dos cortinas con el borde de
-  abajo nítido y la cola deshilachada hacia arriba, rayos verticales que se
-  corren solos y pliegues, verde en el filo, turquesa en el cuerpo y magenta
-  arriba. Se refleja en el agua y en el mármol, y tiñe las nubes.
+- **La columna de luz**: cuando las voces se sostienen (el clímax), sube del
+  cuenco al cielo una columna con núcleo blanco y halo rosa translúcido, como
+  cuando aparece el Hada Mayor, y late con el golpe.
+- **Los haces de los cristales**: en cada primer tiempo de compás uno de los
+  cuatro cristales de las esquinas dispara un haz de luz hacia lo alto, sobre
+  la fuente, y se enciende entero; en el compás siguiente dispara el próximo,
+  así la luz da la vuelta a la isla al ritmo del tema.
+- **La aurora boreal** asoma desde el atardecer y las voces la llevan a pleno.
+  Son dos cortinas con el borde de abajo nítido y la cola deshilachada hacia
+  arriba, rayos verticales que se corren solos y pliegues, y además **toca la
+  canción**: cada nota del arpa manda una ola de brillo que corre por la
+  cortina hacia los dos lados; su **color sigue a los acordes** (cada familia
+  armónica tiene su paleta: verde, azul, rosa, lima); en cada golpe la cortina
+  se **estira** hacia arriba; en cada tiempo sube un **pulso** de brillo del
+  filo a la cima; la cortina se **retuerce en pliegues** que se mueven solos y
+  sus rayos **titilan**; un **resplandor** difuso enciende el cielo alrededor;
+  con las voces aparece una **tercera cortina alta rojo-magenta** y la aurora
+  deja de tener un lado apagado para llenar el cielo entero; y en el clímax
+  converge en una **corona boreal** de rayos hacia el cenit. Se refleja en el
+  agua y en el mármol, tiñe las nubes y le da un tinte a la luz ambiente de la
+  isla.
 - Además: la ocarina se enciende con cada nota, Navi late, los anillos
   toroidales destellan, las hadas se deshacen con el arpa, estrellas fugaces y
   estelas cruzan en los tiempos fuertes, y el bloom, la niebla y los haces de
@@ -186,10 +283,25 @@ Un programa de planos que sigue la canción: abre **lejos y alta**, un plano
 general de la isla sobre las nubes; baja y se acerca a medida que la música
 crece; en el segundo 45 y en el 96 se va a **planos de Link** (de frente, con
 la cara y la ocarina, y por encima del hombro, con la fuente delante), que caen
-justo donde la vuelta de la órbita pone la cámara del lado correcto; en el
-clímax queda en **contrapicado**, con la fuente recortada contra la aurora; y
-con la coda vuelve a abrirse. Entre plano y plano interpola con Catmull-Rom,
-así que pasa por ellos con velocidad en vez de frenar.
+justo donde la vuelta de la órbita pone la cámara del lado correcto; antes del
+clímax da un giro de más para llegar del lado de Link y ahí frena la vuelta:
+queda en **contrapicado**, de frente a la Gran Hada; para la bendición baja
+detrás de Link y mira hacia arriba, al hada sobre él; y con la coda vuelve a
+abrirse. Entre plano y plano interpola con Catmull-Rom, así que pasa por ellos
+con velocidad en vez de frenar. En cada cambio de sección del tema la cámara
+se **adelanta un paso** y vuelve: la estructura de la canción se ve en el
+encuadre.
+
+### ¿La escena responde en todo momento?
+
+`--sync` lo mide: por cuadro toma la reacción más fuerte de la escena a la
+canción (el golpe, un ataque del arpa, el haz de un cristal, las voces, la
+bendición, el hechizo) y dice qué parte del tema queda por debajo de un umbral
+y cuál es el hueco quieto más largo. Salvo la coda, donde el tema se apaga en
+silencio, no hay ningún tramo de más de un segundo y medio en el que no esté
+pasando algo al ritmo de la música. También lista los momentos del hada:
+sale a los 124.9 s, bendice a los 134.1, se zambulle a los 152.1 y el Fuego de
+Din cae a los 152.5.
 
 ---
 
@@ -207,11 +319,20 @@ así que pasa por ellos con velocidad en vez de frenar.
   cuadrática: sustituyendo el rayo en su ecuación implícita queda una
   **cuártica**, que se resuelve por Ferrari (deprimir, cúbica resolvente,
   dos cuadráticas) en `f64`, porque en `f32` los rayos rasantes se pierden y
-  el anillo hierve. Tres de ellos rodean la Trifuerza y giran en precesión.
+  el anillo hierve. Tres de ellos son los halos de invocación de la fuente.
+  Antes de la cuártica, dos descartes baratos: la esfera que envuelve al
+  anillo y la **losa** de su plano, que para un anillo acostado ahorra la
+  cuártica a casi todos los rayos que pasan por encima o por debajo.
 - Materiales con textura, mapa de relieve, reflexión y refracción con
   **Fresnel** (aproximación de Schlick) y sombras translúcidas: el agua y el
   cristal dejan pasar parte de la luz, así que el fondo de la piscina se
   ilumina a través del agua.
+- **Luz propia por punto**: un impacto puede tener luz propia independiente de
+  su material (los anillos del golpe en el agua).
+- **Velos**: lo que es transparente del todo y no desvía (la cúpula del Fuego
+  de Din, los haces, el halo de la columna) suma su luz y informa la
+  profundidad de lo que deja ver, para que la niebla y el desenfoque del
+  post-procesado no lo traten como una pared.
 - **Skybox equirectangular generado por código**. Lo fijo (degradé,
   nebulosa, estrellas, luna) se hornea una vez; el **mar de nubes** también,
   evaluando el ruido en el punto donde cada dirección corta un plano de nubes
@@ -277,10 +398,10 @@ Medido en un MacBook Air M3, trazando a 400×300 y estirando a 800×600, con
 
 | | antes | ahora |
 |---|---|---|
-| Trazado, media de los cinco momentos | 36.6 ms (27 fps) | **23.4 ms (43 fps)** |
-| Peor plano (Link de cerca, de noche) | — | ~35 ms |
+| Trazado, media de los cinco momentos | 36.6 ms (27 fps) | **24 ms (41 fps)** |
+| Peor plano | 44 ms (segundo 160) | ~44 ms (la bendición, de cerca) |
 
-Y eso con la escena **tres veces más grande** (de 34 a 126 objetos, de 8 a 10
+Y eso con la escena **casi ocho veces más grande** (de 34 a 262 objetos, de 8 a 12
 luces). Las notebooks sin ventilador varían un 30% según la temperatura, así
 que las decisiones se tomaron **contando instrucciones ejecutadas**
 (`/usr/bin/time -l`), que no dependen del calor. Con el perfilador de macOS
@@ -300,6 +421,12 @@ que las decisiones se tomaron **contando instrucciones ejecutadas**
 3. **Grupos estáticos con árbol propio** y **una caja por hada y por mota**:
    las motas de polvo estaban en cuatro cajas de seis por cinco unidades, y
    cualquier rayo que cruzara la fuente probaba sus quince esferas. **−7%**.
+4. Y para lo que se sumó después: Link y la Gran Hada van **partidos en grupos
+   por parte del cuerpo** (un rayo que pasa por la cabeza no prueba las
+   botas), el toro descarta con la **losa** de su plano antes de resolver la
+   cuártica, y las estelas de la lluvia son **cubos alineados a los ejes**:
+   con cilindros orientados la lluvia costaba el 9% del cuadro, con cubos
+   casi nada.
 
 La palanca grande sigue siendo la resolución de trazado (`RENDER_W` /
 `RENDER_H` en `src/main.rs`), no el post-procesado: el bloom, la niebla y el
