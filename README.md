@@ -30,7 +30,7 @@ Ni matemática de vectores, ni intersecciones, ni BVH, ni sombreado.
 
 ## Video
 
-**[▶ Ver el video en YouTube (1080p)](https://youtu.be/aDA3A-uqBSQ)** — la
+**[▶ Ver el video en YouTube (1080p)](https://youtu.be/xO1Qp5iP6QI)** — la
 canción entera, en **1440×1080**, grabada con `--video`.
 
 [![El título de Ocarina of Time sobre la isla](docs/portada.jpg)](https://youtu.be/aDA3A-uqBSQ)
