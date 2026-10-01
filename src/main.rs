@@ -341,20 +341,17 @@ impl Sombras {
 const PRESUPUESTO_MS: f32 = 40.0;
 
 /// LOS NIVELES DEL REGULADOR, de peor a mejor: la resolucion del trazado y
-/// el nivel de `CALIDAD`. Primero se baja lo que menos se ve (un rayo de
-/// oclusion en vez de dos), despues la resolucion, y asi alternando. La
-/// resolucion es la palanca grande (a 320 x 240 son la tercera parte de los pixeles),
-/// y el reescalado bicubico de la GPU disimula bastante la diferencia. Es
-/// la RESOLUCION DINAMICA de las consolas: fluido primero, nitido cuando se
-/// puede.
-const NIVELES: [((usize, usize), u32); 9] = [
-    ((320, 240), 0),
-    ((352, 264), 0),
-    ((352, 264), 1),
-    ((400, 300), 0),
-    ((400, 300), 1),
-    ((480, 360), 1),
-    ((480, 360), 2),
+/// el nivel de `CALIDAD`. Hubo una version con RESOLUCION DINAMICA (bajaba
+/// hasta 320 x 240), y rendia, pero cada cambio de resolucion saltaba un
+/// cuadro y reiniciaba el acumulador temporal: la imagen pasaba de nitida a
+/// blanda a cada rato y se veia rara. Ahora la resolucion queda fija y el
+/// regulador solo toca lo que no se nota como salto (los rayos de oclusion
+/// y los rebotes): con la maquina caliente baja un poco la fluidez, no la
+/// nitidez. La tabla sigue siendo de (resolucion, calidad) por si se quiere
+/// volver a probar.
+const NIVELES: [((usize, usize), u32); 4] = [
+    ((RENDER_W as usize, RENDER_H as usize), 0),
+    ((RENDER_W as usize, RENDER_H as usize), 1),
     ((RENDER_W as usize, RENDER_H as usize), 2),
     ((RENDER_W as usize, RENDER_H as usize), 3),
 ];
@@ -4612,7 +4609,8 @@ fn main() {
     let (traza_w, traza_h) = if video.is_some() {
         (VIDEO_W as usize, VIDEO_H as usize)
     } else {
-        (RENDER_W as usize, RENDER_H as usize)
+        // En vivo arranca en el nivel mas alto del regulador (ver `NIVELES`).
+        NIVELES[NIVELES.len() - 1].0
     };
     let mut framebuffer = Framebuffer::new(traza_w, traza_h, BACKGROUND);
     let mut video = video;
@@ -4644,7 +4642,14 @@ fn main() {
         // Los pixeles reales: los puntos por la escala de la pantalla (se
         // calcula y no se le pregunta a la ventana, que recien cambio de
         // tamano y puede no haberse enterado todavia).
-        let escala = rl.get_window_scale_dpi();
+        //
+        // `RETINA=0` la deja en los puntos logicos (como era antes: la
+        // pantalla la agranda suave). Para comparar.
+        let escala = if std::env::var("RETINA").is_ok_and(|v| v == "0") {
+            raylib::prelude::Vector2::new(1.0, 1.0)
+        } else {
+            rl.get_window_scale_dpi()
+        };
         (
             (ventana_w as f32 * escala.x) as u32,
             (ventana_h as f32 * escala.y) as u32,
@@ -4668,6 +4673,7 @@ fn main() {
     // prenden.
     let mut reproyectar = std::env::var("REPROYECCION").is_ok();
     let mut ultimo_dibujo = std::time::Instant::now();
+    let foto_vivo_en: Option<f32> = std::env::var("FOTO_VIVO").ok().and_then(|v| v.parse().ok());
     // El logo de Ocarina of Time para la intro (ver `dibujar_titulo`), con
     // mipmaps: se dibuja mas chico que la imagen, y sin ellos los bordes de
     // las letras titilarian.
@@ -4697,7 +4703,7 @@ fn main() {
     println!("  X        antialiasing 2x2 (cuadruplica el costo)");
     println!("  T        antialiasing temporal (gratis; prendido)");
     println!("  G        regulador: fluidez (prendido) o calidad maxima (apagado)");
-    println!("  R        reproyeccion: la camara se ve a 60 cuadros por segundo (prendida)");
+    println!("  R        reproyeccion: la camara se ve a 60 cuadros por segundo (apagada)");
     println!("  H        mostrar / ocultar la ayuda en pantalla");
     println!("  F        guardar una foto (PNG) del cuadro en pantalla");
     println!("  trazado fijo a {RENDER_W}x{RENDER_H}, estirado a {ventana_w}x{ventana_h}");
@@ -4850,8 +4856,14 @@ fn main() {
         // con la camara quieta, cada vuelta agrega una muestra al
         // acumulador temporal, asi que la foto sale con el antialiasing ya
         // convergido en vez del primer cuadro crudo.
+        // `FOTO_VIVO=47`: en vivo, al llegar a ese segundo guarda una foto de
+        // la ventana tal como se ve (con el tablero, el regulador y todo) y
+        // sale. Sirve para comparar como se ve en vivo sin depender de que
+        // la ventana este adelante.
+        let foto_vivo = foto_vivo_en.is_some_and(|t| tiempo >= t);
         let guardar_foto = rl.is_key_pressed(KeyboardKey::KEY_F)
-            || (foto.is_some() && cuadros == FOTO_CUADROS);
+            || (foto.is_some() && cuadros == FOTO_CUADROS)
+            || foto_vivo;
 
         // ---------- CAMARA ----------
         // El pendulo siempre corre; las teclas se le suman.
@@ -5446,14 +5458,14 @@ fn main() {
         }
 
         if guardar_foto {
-            let nombre = match (foto, std::env::var("FOTO_NOMBRE")) {
+            let nombre = match (foto.or(foto_vivo_en), std::env::var("FOTO_NOMBRE")) {
                 (Some(_), Ok(n)) => n,
                 (Some(t), _) => format!("foto_t{t:.0}.png"),
                 (None, _) => format!("foto_{:.0}s.png", tiempo),
             };
             rl.take_screenshot(&thread, &nombre);
             println!("foto guardada: {nombre}");
-            if foto.is_some() {
+            if foto.is_some() || foto_vivo {
                 break;
             }
         }

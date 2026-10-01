@@ -556,18 +556,19 @@ parte pesada del final (el hada, la bendición, el corazón de cerca) llegaba a
 80 ms. Mover la escena, que cuesta siempre lo mismo, pasaba de 3.0 a 4.6 ms:
 era el procesador, no la escena.
 
-La respuesta es la de las consolas, un **regulador con resolución dinámica**:
-un promedio corrido del cuadro entero y nueve niveles, de 560×420 con todo a
-320×240 con lo mínimo. Si el cuadro pasa del presupuesto (40 ms, 25 por
-segundo) baja un nivel; si sobra mucho, sube. Primero baja lo que menos se ve
-(un rayo de oclusión ambiental en vez de dos; dos rebotes en vez de tres; los
-reflejos sin sombra) y después la resolución, que es la palanca grande; el
-reescalado bicúbico disimula la diferencia. Cambiar de resolución cuesta un
-cuadro. Con el regulador, la canción entera en caliente queda casi toda entre
-22 y 30 ms, y el tramo más duro alrededor de 33. El HUD muestra el nivel. En
+La respuesta es un **regulador de calidad**: un promedio corrido del cuadro
+entero y cuatro niveles. Si el cuadro pasa del presupuesto (40 ms, 25 por
+segundo) baja un nivel; si sobra mucho, sube. Baja solo lo que no se nota como
+un salto: un rayo de oclusión ambiental en vez de dos, dos rebotes en vez de
+tres, los reflejos sin sombra. Hubo una versión con **resolución dinámica**
+(bajaba hasta 320×240, como en las consolas) y rendía, pero cada cambio de
+resolución saltaba un cuadro y reiniciaba el acumulador temporal: la imagen
+pasaba de nítida a blanda a cada rato y se veía rara. Así que la resolución
+quedó fija, y con la máquina caliente baja un poco la fluidez, no la nitidez.
+El HUD muestra el nivel. En
 foto y en video no actúa: ahí todo va a calidad completa. La tecla **G** lo
 apaga en vivo (vuelve de una a la calidad máxima), `SIN_REGULADOR=1` arranca
-con él apagado, y `PRESUPUESTO=40` le pide menos cuadros por segundo (25) a
+con él apagado, y `PRESUPUESTO=50` le pide todavía menos cuadros por segundo (20) a
 cambio de más calidad.
 
 ### 60 cuadros en pantalla: la reproyección

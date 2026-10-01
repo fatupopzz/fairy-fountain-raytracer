@@ -153,7 +153,10 @@ const vec3 LIFT = vec3(0.020, 0.015, 0.034);
 // cuando se arreglo la distancia a los vecinos (ver `main`): hasta ahi el
 // realce casi no actuaba y 0.80 era un numero que no hacia nada; actuando
 // de verdad, 0.80 ya levantaba el ruido de las sombras suaves.
-const float NITIDEZ = 0.55;
+// BAJO otra vez, a 0.25: en vivo, con el trazado de un rayo por pixel, el
+// realce levantaba tambien el ruido de la oclusion y de los reflejos
+// borrosos, y la imagen se veia moteada.
+const float NITIDEZ = 0.25;
 
 // El tinte del halo (ver "halacion" abajo).
 const vec3 HALACION = vec3(1.0, 0.86, 0.96);
@@ -256,7 +259,9 @@ vec3 por_bordes(sampler2D tex, vec2 uv) {
             vec2 o = vec2(float(x - 1), float(y - 1)) - f;
             float a = dot(o, cruza) * escala_cruza;
             float b = dot(o, sigue) * escala_sigue;
-            float w = lanczos2(sqrt(a * a + b * b));
+            // Los lobulos negativos del Lanczos son los que dan filo, pero
+            // tambien realzan el ruido del trazado: se los deja apenas.
+            float w = max(lanczos2(sqrt(a * a + b * b)), -0.03);
             suma += c[y * 4 + x] * w;
             peso += w;
         }

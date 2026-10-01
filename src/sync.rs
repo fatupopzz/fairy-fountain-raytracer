@@ -1727,7 +1727,7 @@ impl SyncData {
             // Constante y sutil, cinematografico. El grano es el soporte, no
             // un efecto: si respirara con la cancion se notaria como un
             // filtro y dejaria de leerse como pelicula.
-            grain_amount: 0.012,
+            grain_amount: 0.005,
         }
     }
 }
