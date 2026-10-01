@@ -20,3 +20,6 @@ loser_sync.json
 
 # El video en alta calidad pesa casi 100 MB; al repo va la version liviana
 docs/fuente_de_las_hadas_hq.mp4
+
+# FOT-Chiaro (Fontworks) es comercial: se usa si esta, pero no se redistribuye.
+resources/fonts/chiaro_b.otf

@@ -122,6 +122,7 @@ mod framebuffer;
 mod fuego_de_din;
 mod corazon;
 mod mariposas;
+mod hud;
 mod fuente;
 mod isla;
 mod grupo_acotado;
@@ -2881,7 +2882,7 @@ const TITULO_SALE: f32 = 8.0;
 /// otros dos antes de que la camara baje. Con cada nota del arpa de la intro
 /// DESTELLA: la misma imagen se suma encima, mas tenue. Va despues de todo
 /// el post-procesado, asi que no le toca ni la niebla ni el desenfoque.
-fn dibujar_titulo<D: RaylibDraw>(d: &mut D, logo: &Texture2D, (ancho, alto): (f32, f32), tiempo: f32, brillo: f32) {
+fn dibujar_titulo<D: RaylibDraw>(d: &mut D, logo: &Texture2D, letra: hud::Letra, hyliano: &Font, (ancho, alto): (f32, f32), tiempo: f32, brillo: f32) {
     let suave = |x: f32| {
         let x = x.clamp(0.0, 1.0);
         x * x * (3.0 - 2.0 * x)
@@ -2900,19 +2901,22 @@ fn dibujar_titulo<D: RaylibDraw>(d: &mut D, logo: &Texture2D, (ancho, alto): (f3
         height: alto_logo,
     };
     let origen = Rectangle { x: 0.0, y: 0.0, width: logo.width as f32, height: logo.height as f32 };
-    // Un resplandor claro detras de las letras: el "THE LEGEND OF" y el
-    // "OCARINA OF TIME" son negros y sobre el cielo violeta no se leian.
-    // Tres circulos degradados, del centro de las letras hacia afuera.
-    for (dx, r, k) in [(0.18f32, 0.36f32, 0.75f32), (0.02, 0.30, 0.50), (0.30, 0.26, 0.50)] {
-        d.draw_circle_gradient(
-            (destino.x + destino.width * (0.5 + dx)) as i32,
-            (destino.y + destino.height * 0.58) as i32,
-            destino.height * r,
-            Color::new(255, 245, 250, (200.0 * k * a) as u8),
-            Color::new(255, 245, 250, 0),
-        );
+    // EL RESPLANDOR DE FUEGO de la pantalla de titulo del juego: la misma
+    // imagen dibujada en suma, corrida en un anillo alrededor y tenida de
+    // naranja, hace un halo que abraza la silueta del logo (y le da fondo a
+    // las letras negras, que sobre el cielo violeta no se leian).
+    {
+        let mut suma = d.begin_blend_mode(BlendMode::BLEND_ADDITIVE);
+        let radio = alto * 0.010;
+        for k in 0..12 {
+            let ang = k as f32 * std::f32::consts::TAU / 12.0 + tiempo * 0.8;
+            let r = radio * (1.0 + 0.25 * (tiempo * 3.0 + k as f32).sin());
+            let corrido = Rectangle { x: destino.x + ang.cos() * r, y: destino.y + ang.sin() * r, ..destino };
+            suma.draw_texture_pro(logo, origen, corrido, Vector2::zero(), 0.0, Color::new(255, 120, 30, (34.0 * a) as u8));
+        }
     }
     d.draw_texture_pro(logo, origen, destino, Vector2::zero(), 0.0, Color::new(255, 255, 255, (255.0 * a) as u8));
+    hud::titulo(d, letra, hyliano, (ancho, alto), destino.y + destino.height + alto * 0.015, a, tiempo);
     let mut suma = d.begin_blend_mode(BlendMode::BLEND_ADDITIVE);
     if brillo > 0.01 {
         suma.draw_texture_pro(
@@ -4689,6 +4693,26 @@ fn main() {
         .expect("no se pudo cargar resources/textures/logo_ocarina.png");
     logo.gen_texture_mipmaps();
     logo.set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_TRILINEAR);
+    // El ALFABETO HYLIANO del juego, para la inscripcion del titulo (ver
+    // `hud::titulo`). Se carga grande y se achica al dibujarla.
+    let hyliano = rl
+        .load_font_ex(&thread, "resources/fonts/hylian64.ttf", 64, None)
+        .expect("no se pudo cargar resources/fonts/hylian64.ttf");
+    hyliano.texture().set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
+    // La letra del texto del HUD: FOT-Chiaro, la de los juegos de Nintendo,
+    // si esta (es comercial y no va en el repositorio; ver `hud::Letra`).
+    // Con los acentos y signos del castellano ademas del ASCII.
+    let chiaro: Option<Font> = {
+        let ruta = "resources/fonts/chiaro_b.otf";
+        let letras: String = (32u8..127).map(|c| c as char).chain("¡¿áéíóúÁÉÍÓÚñÑü".chars()).collect();
+        std::path::Path::new(ruta)
+            .exists()
+            .then(|| rl.load_font_ex(&thread, ruta, 96, Some(&letras)).ok())
+            .flatten()
+    };
+    if let Some(f) = &chiaro {
+        f.texture().set_texture_filter(&thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
+    }
     let mut salida_video: Option<RenderTexture2D> = video.is_some().then(|| {
         rl.load_render_texture(&thread, VIDEO_W, VIDEO_H).expect("no se pudo crear el buffer del video")
     });
@@ -5055,7 +5079,8 @@ fn main() {
                     let mut tm = rl.begin_texture_mode(&thread, salida);
                     tm.clear_background(BACKGROUND);
                     post.efectos(&mut tm, fuente, &params, tiempo, foco);
-                    dibujar_titulo(&mut tm, &logo, (VIDEO_W as f32, VIDEO_H as f32), tiempo, params.pulso);
+                    dibujar_titulo(&mut tm, &logo, chiaro.as_ref(), &hyliano, (VIDEO_W as f32, VIDEO_H as f32), tiempo, params.pulso);
+                    hud::dibujar(&mut tm, chiaro.as_ref(), (VIDEO_W as f32, VIDEO_H as f32), &params);
                 }
 
                 // ---------- DIBUJADO ----------
@@ -5084,7 +5109,8 @@ fn main() {
                     );
                 } else {
                     post.efectos(&mut d, fuente, &params, tiempo, foco);
-                    dibujar_titulo(&mut d, &logo, (ventana_w as f32, ventana_h as f32), tiempo, params.pulso);
+                    dibujar_titulo(&mut d, &logo, chiaro.as_ref(), &hyliano, (ventana_w as f32, ventana_h as f32), tiempo, params.pulso);
+                    hud::dibujar(&mut d, chiaro.as_ref(), (ventana_w as f32, ventana_h as f32), &params);
                 }
 
                 // EL HUD NO SALE EN LAS FOTOS.

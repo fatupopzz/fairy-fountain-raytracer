@@ -36,7 +36,7 @@ canción entera, en **1440×1080**, grabada con `--video`.
 [![El título de Ocarina of Time sobre la isla](docs/portada.jpg)](https://youtu.be/aDA3A-uqBSQ)
 
 También está en el repo, comprimido: [docs/fuente_de_las_hadas.mp4](docs/fuente_de_las_hadas.mp4)
-(62 MB; la versión en alta calidad, de 277 MB, se regenera con el mismo
+(58 MB; la versión en alta calidad, de 256 MB, se regenera con el mismo
 comando y no va al repo).
 
 ---
@@ -336,6 +336,25 @@ noche.
   levanta con los dos brazos (la misma cinemática inversa de la bendición)
   mientras la cámara pasa a un primer plano de frente; después se deshace en
   luz y Link mira el cielo.
+
+### Como una cinemática del juego
+
+Encima de la imagen trazada, dibujado con código (texto, círculos y
+triángulos de raylib, sin ninguna imagen del juego; `src/hud.rs`):
+
+- En el título, **PRESS START** en rojo, el resplandor de fuego alrededor del
+  logo, y debajo "la gran fuente de las hadas" escrito en **alfabeto hyliano**
+  (la fuente `resources/fonts/hylian64.ttf`, *Hylian 64*, una fuente hecha por
+  fans con el alfabeto de *Ocarina of Time*).
+- **El cuadro de texto** cuando Link levanta el corazón: "¡Conseguiste un
+  **Contenedor de Corazón**!", con las letras apareciendo de a una y el nombre
+  del objeto en rojo, como en el juego.
+
+El texto usa **FOT-Chiaro**, la letra de los textos de los juegos de Nintendo,
+si está en `resources/fonts/chiaro_b.otf`. Es una fuente comercial de
+Fontworks, así que **no está en el repositorio**: sin ella se usa la letra
+pixelada de raylib. Hubo también un HUD de partida (corazones, magia, rupias y
+el pentagrama de la ocarina), pero la escena se lee mejor como una cinemática.
 
 ### Vida
 
