@@ -1484,7 +1484,7 @@ impl SyncData {
                 + hacia_uno * 0.18
                 + self.cine(t) * 0.28)
                 * (0.40 + 0.60 * noche))
-                .min(0.95),
+                .min(0.80),
             // No esta en el guion. Se ata al bass igual que la fuerza del
             // bloom porque las dos describen el mismo halo: si el brillo
             // crece y el radio no, el bloom se ve como un recorte duro.
@@ -1523,7 +1523,9 @@ impl SyncData {
             // 39% de la imagen (el marmol iluminado, el pasillo, los
             // paneles). Con 0.60 florece lo que brilla por su cuenta —las
             // hadas, la Trifuerza, las chispas, los anillos— y no la piedra.
-            bloom_threshold: 0.60 + dia * 0.20,
+            // Subio de 0.60: en vivo el halo nacia de demasiadas cosas (el
+            // marmol iluminado, las antorchas) y velaba el cuadro entero.
+            bloom_threshold: 0.70 + dia * 0.18,
             // La niebla del ALBA es mas espesa: la bruma de la manana es
             // una cosa real, se levanta con el sol y se disipa despues, y
             // aca ademas hace falta por una razon de composicion. Al

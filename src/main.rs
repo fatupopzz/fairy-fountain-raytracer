@@ -1684,7 +1684,7 @@ const GODRAYS_DECAY: f32 = 0.95;
 /// EXPOSICION DE BASE de los rayos, la que tienen entre golpe y golpe.
 ///
 /// El valor sube con `GODRAYS_PULSO` en cada tiempo. Ver `god_rays`.
-const GODRAYS_EXPOSURE: f32 = 0.25;
+const GODRAYS_EXPOSURE: f32 = 0.19;
 
 /// CUANTO SE ENCIENDEN LOS HACES EN EL GOLPE.
 ///
@@ -1705,7 +1705,7 @@ const GODRAYS_EXPOSURE: f32 = 0.25;
 /// aquello era un valor SOSTENIDO y esto es un pico de 120 milisegundos.
 /// Lo que como promedio permanente era un velo blanco, como transitorio es
 /// un destello.
-const GODRAYS_PULSO: f32 = 0.45;
+const GODRAYS_PULSO: f32 = 0.30;
 const GODRAYS_SAMPLES: i32 = 60;
 
 impl PostGpu {
@@ -2378,7 +2378,7 @@ const DOF_RADIO: f32 = 0.007;
 /// tapaba el altar igual. A 6 se lee como una raya de lente sobre el agua y
 /// debajo del oro, y la Triforce sigue recortada contra ella incluso en el
 /// segundo 142, que es el momento mas cargado de los tres minutos.
-const ESTELA_FUERZA: f32 = 6.0;
+const ESTELA_FUERZA: f32 = 3.5;
 
 /// De QUE NIVEL de la cadena de mips salen las estelas anamorficas.
 ///
@@ -4673,7 +4673,14 @@ fn main() {
     // prenden.
     let mut reproyectar = std::env::var("REPROYECCION").is_ok();
     let mut ultimo_dibujo = std::time::Instant::now();
-    let foto_vivo_en: Option<f32> = std::env::var("FOTO_VIVO").ok().and_then(|v| v.parse().ok());
+    // `FOTO_VIVO=20,47,138`: una foto en vivo en cada uno de esos segundos
+    // (`FOTO_NOMBRE` les pone el prefijo), y al terminar sale.
+    let mut fotos_vivo: Vec<f32> = std::env::var("FOTO_VIVO")
+        .ok()
+        .map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+        .unwrap_or_default();
+    fotos_vivo.sort_by(|a, b| a.total_cmp(b));
+    let foto_vivo_en: Option<f32> = fotos_vivo.first().copied();
     // El logo de Ocarina of Time para la intro (ver `dibujar_titulo`), con
     // mipmaps: se dibuja mas chico que la imagen, y sin ellos los bordes de
     // las letras titilarian.
@@ -4860,7 +4867,7 @@ fn main() {
         // la ventana tal como se ve (con el tablero, el regulador y todo) y
         // sale. Sirve para comparar como se ve en vivo sin depender de que
         // la ventana este adelante.
-        let foto_vivo = foto_vivo_en.is_some_and(|t| tiempo >= t);
+        let foto_vivo = fotos_vivo.first().is_some_and(|&t| tiempo >= t);
         let guardar_foto = rl.is_key_pressed(KeyboardKey::KEY_F)
             || (foto.is_some() && cuadros == FOTO_CUADROS)
             || foto_vivo;
@@ -5459,13 +5466,17 @@ fn main() {
 
         if guardar_foto {
             let nombre = match (foto.or(foto_vivo_en), std::env::var("FOTO_NOMBRE")) {
+                (Some(_), Ok(n)) if foto_vivo => format!("{n}_{:.0}.png", tiempo),
                 (Some(_), Ok(n)) => n,
                 (Some(t), _) => format!("foto_t{t:.0}.png"),
                 (None, _) => format!("foto_{:.0}s.png", tiempo),
             };
             rl.take_screenshot(&thread, &nombre);
             println!("foto guardada: {nombre}");
-            if foto.is_some() || foto_vivo {
+            if foto_vivo {
+                fotos_vivo.remove(0);
+            }
+            if foto.is_some() || (foto_vivo && fotos_vivo.is_empty()) {
                 break;
             }
         }

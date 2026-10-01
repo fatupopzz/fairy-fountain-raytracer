@@ -1108,7 +1108,7 @@ pub fn actualizar_escena(
                         let h = (params.hada * 2.5).clamp(0.0, 1.0);
                         1.0 - 0.9 * h * h * (3.0 - 2.0 * h)
                     };
-                    let k = s * cede * (0.75 + 0.35 * params.pulso).min(1.0) * if escala > 1.0 { 0.30 } else { 1.0 };
+                    let k = s * cede * (0.75 + 0.35 * params.pulso).min(1.0) * if escala > 1.0 { 0.26 } else { 0.75 };
                     pilar.material.emission_color =
                         Some(Color::new((r * k) as u8, (g * k) as u8, (b * k) as u8, 255));
                 }

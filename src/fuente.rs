@@ -403,7 +403,9 @@ pub fn armar(
         1.0,
         0.0,
         Texture::Solid(Color::new(255, 200, 120, 255)),
-        Some(Color::new(255, 130, 35, 255)),
+        // Algo menos que el naranja pleno: con todo, la llama se quemaba a
+        // blanco y dejaba un manchon de halo en cada antorcha.
+        Some(Color::new(215, 100, 25, 255)),
     );
     for lado in [-1.0f32, 1.0] {
         let c = Vec3::new(lado * ANTORCHA_X, 0.0, ANTORCHA_Z);
